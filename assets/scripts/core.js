@@ -364,15 +364,16 @@ async function startProcessing(options = {}) {
 }
 
 async function processRun() {
+  const MAX_RETRIES = 3;
   const key = apiKey.value.trim();
-  const processed = new Map((currentRun.results || []).map(item => [item.pg, item]));
-  let hadErrors = false;
-  updateProgressUI();
   const pagesToProcess = currentRun.selectedPages || [];
+  updateProgressUI();
 
   for (let idx = 0; idx < pagesToProcess.length; idx++) {
     const pg = pagesToProcess[idx];
+    const processed = new Map((currentRun.results || []).map(item => [item.pg, item]));
     if (processed.has(pg)) continue;
+
     currentRun.currentPage = pg;
     currentRun.updatedAt = Date.now();
     await saveCurrentRun();
@@ -391,34 +392,52 @@ async function processRun() {
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     const b64 = cv.toDataURL('image/jpeg', .92).split(',')[1];
 
-    addOrUpdateLog(pg, 'Explaining with Claude…', 'active');
-    let result;
-    try {
-      activeClaudeController = new AbortController();
-      const expl = await claude(key, currentRun.model, currentRun.prompt, b64, activeClaudeController.signal);
-      result = { pg, b64, expl };
-      addOrUpdateLog(pg, expl.slice(0, 100) + '…', 'done');
-    } catch (e) {
-      if (isAbortError(e) && cancelRequested) {
-        currentRun.status = 'cancelled';
-        currentRun.updatedAt = Date.now();
-        await saveCurrentRun();
-        setStatus('Cancelled. Start again or choose other slides.', false);
-        return;
+    let result = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      addOrUpdateLog(pg, attempt > 1 ? `Explaining with Claude… (attempt ${attempt})` : 'Explaining with Claude…', 'active');
+      try {
+        activeClaudeController = new AbortController();
+        const expl = await claude(key, currentRun.model, currentRun.prompt, b64, activeClaudeController.signal);
+        result = { pg, b64, expl };
+        addOrUpdateLog(pg, expl.slice(0, 100) + '…', 'done');
+        break;
+      } catch (e) {
+        activeClaudeController = null;
+        if (isAbortError(e) && cancelRequested) {
+          currentRun.status = 'cancelled';
+          currentRun.updatedAt = Date.now();
+          await saveCurrentRun();
+          setStatus('Cancelled. You can start over or try with different slides.', false);
+          return;
+        }
+        if (attempt < MAX_RETRIES) {
+          const delaySec = attempt * 5;
+          addOrUpdateLog(pg, `Error – retrying in ${delaySec}s…`, 'active');
+          setStatus(`Page ${getDisplayPageNumber(pg, pagesToProcess)}: error, retrying in ${delaySec}s…`);
+          await wait(delaySec * 1000);
+          if (cancelRequested) {
+            currentRun.status = 'cancelled';
+            currentRun.updatedAt = Date.now();
+            await saveCurrentRun();
+            setStatus('Cancelled. You can start over or try with different slides.', false);
+            return;
+          }
+        } else {
+          addOrUpdateLog(pg, `Failed after ${MAX_RETRIES} attempts – will retry later.`, 'error');
+        }
+      } finally {
+        activeClaudeController = null;
       }
-      result = { pg, b64, expl: `[Error: ${e.message}]` };
-      hadErrors = true;
-      addOrUpdateLog(pg, 'Error: ' + e.message, 'error');
-    } finally {
-      activeClaudeController = null;
     }
 
-    currentRun.results.push(result);
-    currentRun.results.sort((a, b) => a.pg - b.pg);
-    currentRun.currentPage = pagesToProcess[idx + 1] || pg;
-    currentRun.updatedAt = Date.now();
-    await saveCurrentRun();
-    updateProgressUI();
+    if (result) {
+      currentRun.results.push(result);
+      currentRun.results.sort((a, b) => a.pg - b.pg);
+      currentRun.currentPage = pagesToProcess[idx + 1] || pg;
+      currentRun.updatedAt = Date.now();
+      await saveCurrentRun();
+      updateProgressUI();
+    }
 
     if (cancelRequested) {
       currentRun.status = 'cancelled';
@@ -439,16 +458,14 @@ async function processRun() {
     if (idx < pagesToProcess.length - 1) await wait(280);
   }
 
-  if (hadErrors) {
-    activeBlob = null;
-    activePdfBlob = null;
-    doneWrap.classList.add('hidden');
-    removeGeneratedPreview();
-    currentRun.status = 'error';
+  const remaining = pagesToProcess.filter(pg => !(currentRun.results || []).some(r => r.pg === pg));
+  if (remaining.length > 0) {
+    setStatus(`${remaining.length} slide(s) failed – retrying in 10s…`);
+    await wait(10000);
+    if (!cancelRequested) return processRun();
+    currentRun.status = 'cancelled';
     currentRun.updatedAt = Date.now();
     await saveCurrentRun();
-    setStatus('Error', false);
-    showErr('The document was not generated because one or more pages failed. Fix the error and try again.');
     return;
   }
 
@@ -509,7 +526,25 @@ async function restoreSavedRun() {
     setStatus(`Paused on page ${getDisplayPageNumber(saved.currentPage || saved.from, saved.selectedPages)} of ${(saved.selectedPages || []).length || saved.to}`, false);
   } else if (saved.status === 'cancelled' || saved.status === 'cancelling') {
     progCard.classList.remove('hidden');
-    setStatus('Cancelled. Start again or choose other slides.', false);
+    setStatus('Cancelled. You can start over or try with different slides.', false);
+  } else if (saved.status === 'error') {
+    progCard.classList.remove('hidden');
+    const done = (saved.results || []).length;
+    const total = (saved.selectedPages || []).length;
+    setStatus(`Resuming – ${done} of ${total} slides done, retrying failed ones…`);
+    saved.status = 'running';
+    currentRun.status = 'running';
+    await saveCurrentRun();
+    refreshActionButtons();
+    if (!apiKey.value.trim().startsWith('sk-')) {
+      saved.status = 'paused';
+      currentRun.status = 'paused';
+      await saveCurrentRun();
+      setStatus(`Add your API key to resume (${done}/${total} slides done).`, false);
+      refreshActionButtons();
+      return;
+    }
+    await startProcessing({ resume: true });
   } else {
     if (!apiKey.value.trim().startsWith('sk-')) {
       saved.status = 'paused';
