@@ -358,6 +358,7 @@ async function startProcessing(options = {}) {
   } finally {
     isRunning = false;
     refreshActionButtons();
+    if (cancelRequested) cancelBtn.disabled = true;
     checkReady();
   }
 }
@@ -611,6 +612,7 @@ async function cancelCurrentRun() {
   doneWrap.classList.add('hidden');
   setStatus('Cancelled. You can start over or try with different slides.', false);
   refreshActionButtons();
+  cancelBtn.disabled = true;
 }
 
 async function saveCurrentRun() {
