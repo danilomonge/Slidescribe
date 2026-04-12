@@ -69,6 +69,7 @@ function stepPaperPlanes(timestamp) {
 
 function updatePaperPlane(state, dt) {
   const box = planeCorridor();
+  const viewportHeight = window.innerHeight;
   state.phase1 += state.freq1 * dt;
   state.phase2 += state.freq2 * dt;
   state.driftTimer -= dt;
@@ -79,18 +80,28 @@ function updatePaperPlane(state, dt) {
 
   const sinusTurn = Math.sin(state.phase1) * state.amp1 + Math.sin(state.phase2) * state.amp2 + state.turnDrift;
   let steer = 0;
+  const leftPressure = edgePressure(state.x, box.minX, 52);
+  const rightPressure = edgePressure(box.maxX, state.x, 52);
+  const topPressure = edgePressure(state.y, 0, 84);
+  const bottomPressure = edgePressure(viewportHeight, state.y, 52);
 
-  if (state.x < box.minX + 24) steer += 2.1;
-  if (state.x > box.maxX - 24) steer -= 2.1;
-  if (state.y < 18) steer += 1.55;
-  if (state.y > window.innerHeight - 18) steer -= 1.55;
+  if (leftPressure > 0) steer += 1.6 * leftPressure;
+  if (rightPressure > 0) steer -= 1.6 * rightPressure;
+  if (topPressure > 0) steer += 2.5 * topPressure;
+  if (bottomPressure > 0) steer -= 1.35 * bottomPressure;
+
+  if (topPressure > 0 || leftPressure > 0 || rightPressure > 0 || bottomPressure > 0) {
+    const desiredHeading = cornerEscapeHeading(state.x, state.y, box, viewportHeight);
+    const pressure = Math.max(topPressure, leftPressure, rightPressure, bottomPressure);
+    steer += shortestAngleDelta(state.heading, desiredHeading) * (1.8 + pressure * 1.4);
+  }
 
   state.heading = normalizeAngle(state.heading + (sinusTurn + steer) * dt);
   state.x += Math.cos(state.heading) * state.speed * dt;
   state.y += Math.sin(state.heading) * state.speed * dt;
 
   state.x = clamp(state.x, box.minX, box.maxX);
-  state.y = clamp(state.y, 14, window.innerHeight - 14);
+  state.y = clamp(state.y, 14, viewportHeight - 14);
   positionPlane(state);
 }
 
@@ -115,6 +126,23 @@ function normalizeAngle(value) {
   while (value > Math.PI) value -= Math.PI * 2;
   while (value < -Math.PI) value += Math.PI * 2;
   return value;
+}
+
+function shortestAngleDelta(from, to) {
+  return normalizeAngle(to - from);
+}
+
+function edgePressure(value, boundary, distance) {
+  return clamp((distance - Math.abs(value - boundary)) / distance, 0, 1);
+}
+
+function cornerEscapeHeading(x, y, box, viewportHeight) {
+  const horizontalMid = (box.minX + box.maxX) / 2;
+  if (y < 120) return x < horizontalMid ? deg(48) : deg(132);
+  if (y > viewportHeight - 120) return x < horizontalMid ? deg(-42) : deg(-138);
+  if (x < box.minX + 80) return deg(12);
+  if (x > box.maxX - 80) return deg(168);
+  return y < viewportHeight / 2 ? deg(90) : deg(-90);
 }
 
 function clamp(value, min, max) {
