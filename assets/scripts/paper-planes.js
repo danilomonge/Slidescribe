@@ -102,8 +102,17 @@ function updatePaperPlane(state, dt) {
   state.x += Math.cos(state.heading) * state.speed * dt;
   state.y += Math.sin(state.heading) * state.speed * dt;
 
-  state.x = clamp(state.x, box.minX, box.maxX);
-  state.y = clamp(state.y, 14, viewportHeight - 14);
+  const hitLeft = state.x <= box.minX;
+  const hitRight = state.x >= box.maxX;
+  const hitTop = state.y <= 14;
+  const hitBottom = state.y >= viewportHeight - 14;
+
+  if (hitLeft || hitRight || hitTop || hitBottom) {
+    state.heading = normalizeAngle(state.heading + Math.PI);
+  }
+
+  state.x = clamp(state.x, box.minX + 2, box.maxX - 2);
+  state.y = clamp(state.y, 16, viewportHeight - 16);
   positionPlane(state);
 }
 
