@@ -1,2 +1,23 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor directories
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Test output
+output/
 .playwright-cli/
+
+# Dependency directories (in case a build step is ever added)
+node_modules/
+
+# Environment / secrets
+.env
+.env.local
