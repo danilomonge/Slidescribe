@@ -423,7 +423,7 @@ async function processRun() {
       currentRun.status = 'cancelled';
       currentRun.updatedAt = Date.now();
       await saveCurrentRun();
-      setStatus('Cancelled. You can resume, reset, or start again.', false);
+      setStatus('Cancelled. You can start over or try with different slides.', false);
       return;
     }
 
