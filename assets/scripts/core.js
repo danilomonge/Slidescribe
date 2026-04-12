@@ -393,13 +393,23 @@ async function processRun() {
     addOrUpdateLog(pg, 'Explaining with Claude…', 'active');
     let result;
     try {
-      const expl = await claude(key, currentRun.model, currentRun.prompt, b64);
+      activeClaudeController = new AbortController();
+      const expl = await claude(key, currentRun.model, currentRun.prompt, b64, activeClaudeController.signal);
       result = { pg, b64, expl };
       addOrUpdateLog(pg, expl.slice(0, 100) + '…', 'done');
     } catch (e) {
+      if (isAbortError(e) && cancelRequested) {
+        currentRun.status = 'cancelled';
+        currentRun.updatedAt = Date.now();
+        await saveCurrentRun();
+        setStatus('Cancelled. Start again or choose other slides.', false);
+        return;
+      }
       result = { pg, b64, expl: `[Error: ${e.message}]` };
       hadErrors = true;
       addOrUpdateLog(pg, 'Error: ' + e.message, 'error');
+    } finally {
+      activeClaudeController = null;
     }
 
     currentRun.results.push(result);
@@ -496,7 +506,7 @@ async function restoreSavedRun() {
   } else if (saved.status === 'paused') {
     progCard.classList.remove('hidden');
     setStatus(`Paused on page ${getDisplayPageNumber(saved.currentPage || saved.from, saved.selectedPages)} of ${(saved.selectedPages || []).length || saved.to}`, false);
-  } else if (saved.status === 'cancelled') {
+  } else if (saved.status === 'cancelled' || saved.status === 'cancelling') {
     progCard.classList.remove('hidden');
     setStatus('Cancelled. Start again or choose other slides.', false);
   } else {
@@ -535,6 +545,7 @@ function refreshActionButtons() {
   pauseBtn.disabled = !hasRun || !['running', 'paused'].includes(currentRun?.status);
   pauseBtn.textContent = currentRun?.status === 'running' ? 'Pause' : 'Resume';
   cancelBtn.disabled = !hasRun || currentRun?.status === 'done';
+  cancelBtn.textContent = currentRun?.status === 'cancelling' ? 'Cancelling…' : 'Cancel';
   resetBtn.disabled = !hasRun && !pdf;
   checkReady();
 }
@@ -562,6 +573,8 @@ function bindPdfDownload(blob, srcName) {
 async function resetCurrentRun() {
   pauseRequested = false;
   cancelRequested = false;
+  activeClaudeController?.abort();
+  activeClaudeController = null;
   isRunning = false;
   activeBlob = null;
   activePdfBlob = null;
@@ -590,9 +603,15 @@ async function cancelCurrentRun() {
   pauseRequested = false;
   cancelRequested = true;
   if (currentRun) {
-    currentRun.status = 'cancelled';
+    currentRun.status = isRunning ? 'cancelling' : 'cancelled';
     currentRun.updatedAt = Date.now();
     await saveCurrentRun();
+  }
+  if (isRunning) {
+    cancelBtn.textContent = 'Cancelling…';
+    cancelBtn.disabled = true;
+    setStatus('Cancelling…', true);
+    activeClaudeController?.abort();
   }
   doneWrap.classList.add('hidden');
   if (!isRunning) setStatus('Cancelled. Start again or choose other slides.', false);

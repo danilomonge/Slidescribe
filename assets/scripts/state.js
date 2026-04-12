@@ -31,6 +31,7 @@ let dbPromise = null;
 let pdf = null, pdfBuffer = null, pdfFileMeta = null;
 let currentRun = null, activeBlob = null, activePdfBlob = null;
 let isRunning = false, pauseRequested = false, cancelRequested = false;
+let activeClaudeController = null;
 const fieldHistory = new WeakMap();
 let selectedPages = [];
 let pageSelectionHistory = { stack: [], index: -1 };

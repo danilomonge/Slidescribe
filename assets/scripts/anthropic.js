@@ -1,7 +1,8 @@
 // ── Claude API ───────────────────────────────────────────────────
-async function claude(key, model, prompt, b64) {
+async function claude(key, model, prompt, b64, signal) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
+    signal,
     headers:{ 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
     body: JSON.stringify({ model, max_tokens:1200, messages:[{role:'user',content:[
       {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
@@ -42,4 +43,8 @@ function humanizeClaudeError(status, payload) {
     return `Anthropic returned an error: ${apiMessage}`;
   }
   return `Anthropic returned an unexpected error (HTTP ${status}).`;
+}
+
+function isAbortError(error) {
+  return error?.name === 'AbortError';
 }
