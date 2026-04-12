@@ -14,7 +14,9 @@ function initPaperPlanes() {
     { side: 'right', x: 0.88, y: 0.82, heading: deg(168), speed: 126, amp1: .78, amp2: .33, freq1: .72, freq2: 1.28, scale: .94 },
     { side: 'left',  x: 0.18, y: 0.27, heading: deg(30),  speed: 118, amp1: .68, amp2: .26, freq1: .9,  freq2: 1.44, scale: .87 },
     { side: 'right', x: 0.82, y: 0.64, heading: deg(198), speed: 122, amp1: .72, amp2: .29, freq1: .78, freq2: 1.3,  scale: .86 },
-    { side: 'left',  x: 0.12, y: 0.9,  heading: deg(-22), speed: 116, amp1: .7,  amp2: .28, freq1: .84, freq2: 1.38, scale: .9 }
+    { side: 'left',  x: 0.12, y: 0.9,  heading: deg(-22), speed: 116, amp1: .7,  amp2: .28, freq1: .84, freq2: 1.38, scale: .9 },
+    { side: 'right', x: 0.91, y: 0.14, heading: deg(214), speed: 120, amp1: .7,  amp2: .27, freq1: .76, freq2: 1.24, scale: .88 },
+    { side: 'left',  x: 0.08, y: 0.52, heading: deg(8),   speed: 118, amp1: .66, amp2: .26, freq1: .88, freq2: 1.42, scale: .85 }
   ];
 
   planeStates = planes.map((el, idx) => {
@@ -23,8 +25,8 @@ function initPaperPlanes() {
     return {
       el,
       side: cfg.side,
-      x: box.minX + (box.maxX - box.minX) * .5,
-      y: window.innerHeight * cfg.y,
+      x: box.minX + (box.maxX - box.minX) * (0.08 + Math.random() * 0.84),
+      y: window.innerHeight * (0.1 + Math.random() * 0.8),
       heading: cfg.heading,
       speed: cfg.speed,
       amp1: cfg.amp1,

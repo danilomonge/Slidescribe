@@ -101,6 +101,14 @@ body {
   --plane-size: 19px;
   opacity: .23;
 }
+.plane-12 {
+  --plane-size: 18px;
+  opacity: .2;
+}
+.plane-13 {
+  --plane-size: 16px;
+  opacity: .18;
+}
 
 .orb {
   position: absolute; border-radius: 50%;
@@ -744,5 +752,5 @@ textarea { resize: vertical; min-height: 96px; line-height: 1.55; }
   .grid-2 { grid-template-columns: 1fr; }
   .hero h1 { font-size: 2.6rem; }
   .paper-plane { opacity: .2; }
-  .plane-2, .plane-4, .plane-5, .plane-6, .plane-7, .plane-8, .plane-9, .plane-10, .plane-11 { display: none; }
+  .plane-2, .plane-4, .plane-5, .plane-6, .plane-7, .plane-8, .plane-9, .plane-10, .plane-11, .plane-12, .plane-13 { display: none; }
 }
