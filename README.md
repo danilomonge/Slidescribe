@@ -51,6 +51,27 @@ Your API key never leaves your browser. All processing happens client-side — n
 - [docx](https://docx.js.org/) — Word document generation
 - [Anthropic API](https://docs.anthropic.com) — AI explanations via Claude
 
+## Project structure
+
+```text
+.
+├── assets
+│   ├── scripts
+│   │   ├── anthropic.js
+│   │   ├── bootstrap.js
+│   │   ├── core.js
+│   │   ├── exporters.js
+│   │   ├── helpers.js
+│   │   ├── paper-planes.js
+│   │   ├── state.js
+│   │   └── undo.js
+│   └── styles
+│       └── main.css
+├── index.html
+├── LICENSE
+└── README.md
+```
+
 ## License
 
 MIT
