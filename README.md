@@ -15,7 +15,7 @@ Explanations include:
 
 ## Live demo
 
-[yourusername.github.io/slidescribe](https://yourusername.github.io/slidescribe)
+[danilomonge.github.io/Slidescribe](https://danilomonge.github.io/Slidescribe/)
 
 ## Usage
 
@@ -23,6 +23,16 @@ Explanations include:
 2. Get a free API key at [console.anthropic.com](https://console.anthropic.com)
 3. Drop your PDF, paste your API key, click **Generate**
 4. Download the explained Word document
+
+## GitHub Pages
+
+This repo is ready to deploy directly from GitHub Pages because it is fully static.
+
+1. Push `index.html` to your default branch
+2. In GitHub, open `Settings → Pages`
+3. Set `Source` to `Deploy from a branch`
+4. Select your default branch and `/ (root)`
+5. Save, then open `https://danilomonge.github.io/Slidescribe/`
 
 ## Cost estimate
 
