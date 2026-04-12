@@ -603,18 +603,13 @@ async function cancelCurrentRun() {
   pauseRequested = false;
   cancelRequested = true;
   if (currentRun) {
-    currentRun.status = isRunning ? 'cancelling' : 'cancelled';
+    currentRun.status = 'cancelled';
     currentRun.updatedAt = Date.now();
     await saveCurrentRun();
   }
-  if (isRunning) {
-    cancelBtn.textContent = 'Cancelling…';
-    cancelBtn.disabled = true;
-    setStatus('Cancelling…', true);
-    activeClaudeController?.abort();
-  }
+  activeClaudeController?.abort();
   doneWrap.classList.add('hidden');
-  if (!isRunning) setStatus('Cancelled. Start again or choose other slides.', false);
+  setStatus('Cancelled. You can start over or try with different slides.', false);
   refreshActionButtons();
 }
 
