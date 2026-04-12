@@ -5,15 +5,15 @@ function initPaperPlanes() {
 
   const baseConfigs = [
     { side: 'left',  x: 0.06, y: 0.17, heading: deg(24),  speed: 136, amp1: .82, amp2: .36, freq1: .62, freq2: 1.18, scale: 1.00 },
-    { side: 'left',  x: 0.10, y: 0.38, heading: deg(-30), speed: 128, amp1: .78, amp2: .34, freq1: .74, freq2: 1.26, scale: .96 },
+    { side: 'left',  x: 0.10, y: 0.72, heading: deg(-30), speed: 128, amp1: .78, amp2: .34, freq1: .74, freq2: 1.26, scale: .96 },
     { side: 'right', x: 0.94, y: 0.22, heading: deg(208), speed: 142, amp1: .86, amp2: .38, freq1: .58, freq2: 1.14, scale: 1.01 },
-    { side: 'right', x: 0.90, y: 0.63, heading: deg(152), speed: 132, amp1: .8,  amp2: .34, freq1: .7,  freq2: 1.22, scale: .98 },
+    { side: 'right', x: 0.90, y: 0.78, heading: deg(152), speed: 132, amp1: .8,  amp2: .34, freq1: .7,  freq2: 1.22, scale: .98 },
     { side: 'left',  x: 0.07, y: 0.79, heading: deg(-10), speed: 124, amp1: .76, amp2: .32, freq1: .8,  freq2: 1.34, scale: .93 },
     { side: 'right', x: 0.84, y: 0.48, heading: deg(188), speed: 130, amp1: .74, amp2: .3,  freq1: .66, freq2: 1.16, scale: .91 },
     { side: 'left',  x: 0.14, y: 0.58, heading: deg(12),  speed: 120, amp1: .7,  amp2: .28, freq1: .86, freq2: 1.4,  scale: .89 },
     { side: 'right', x: 0.88, y: 0.82, heading: deg(168), speed: 126, amp1: .78, amp2: .33, freq1: .72, freq2: 1.28, scale: .94 },
     { side: 'left',  x: 0.18, y: 0.27, heading: deg(30),  speed: 118, amp1: .68, amp2: .26, freq1: .9,  freq2: 1.44, scale: .87 },
-    { side: 'right', x: 0.82, y: 0.36, heading: deg(198), speed: 122, amp1: .72, amp2: .29, freq1: .78, freq2: 1.3,  scale: .86 },
+    { side: 'right', x: 0.82, y: 0.64, heading: deg(198), speed: 122, amp1: .72, amp2: .29, freq1: .78, freq2: 1.3,  scale: .86 },
     { side: 'left',  x: 0.12, y: 0.9,  heading: deg(-22), speed: 116, amp1: .7,  amp2: .28, freq1: .84, freq2: 1.38, scale: .9 }
   ];
 
