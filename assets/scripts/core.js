@@ -545,7 +545,7 @@ function refreshActionButtons() {
   pauseBtn.disabled = !hasRun || !['running', 'paused'].includes(currentRun?.status);
   pauseBtn.textContent = currentRun?.status === 'running' ? 'Pause' : 'Resume';
   cancelBtn.disabled = !hasRun || ['done', 'cancelled'].includes(currentRun?.status);
-  cancelBtn.textContent = currentRun?.status === 'cancelling' ? 'Cancelling…' : currentRun?.status === 'cancelled' ? 'Cancelled' : 'Cancel';
+  cancelBtn.textContent = 'Cancel';
   resetBtn.disabled = !hasRun && !pdf;
   checkReady();
 }
