@@ -363,7 +363,10 @@ async function startProcessing(options = {}) {
   }
 }
 
-async function processRun() {
+async function processRun(pass = 1) {
+  const MAX_ATTEMPTS = 4;
+  const MAX_PASSES = 2;
+  const RETRY_DELAYS = [10, 20, 40]; // seconds between attempts
   const key = apiKey.value.trim();
   const pagesToProcess = currentRun.selectedPages || [];
   updateProgressUI();
@@ -392,15 +395,14 @@ async function processRun() {
     const b64 = cv.toDataURL('image/jpeg', .92).split(',')[1];
 
     let result = null;
-    let attempt = 0;
-    while (!result) {
-      attempt++;
-      addOrUpdateLog(pg, attempt > 1 ? `Explaining with Claude… (retry ${attempt - 1})` : 'Explaining with Claude…', 'active');
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      addOrUpdateLog(pg, attempt > 1 ? `Explaining with Claude… (attempt ${attempt}/${MAX_ATTEMPTS})` : 'Explaining with Claude…', 'active');
       try {
         activeClaudeController = new AbortController();
         const expl = await claude(key, currentRun.model, currentRun.prompt, b64, activeClaudeController.signal);
         result = { pg, b64, expl };
         addOrUpdateLog(pg, expl.slice(0, 100) + '…', 'done');
+        break;
       } catch (e) {
         activeClaudeController = null;
         if (isAbortError(e) && cancelRequested) {
@@ -410,7 +412,7 @@ async function processRun() {
           setStatus('Cancelled. You can start over or try with different slides.', false);
           return;
         }
-        // Non-retryable API errors (auth, billing, permissions, model) — stop the run
+        // Non-retryable API errors (auth, billing, permissions) — stop immediately
         if (e.retryable === false) {
           currentRun.status = 'error';
           currentRun.updatedAt = Date.now();
@@ -418,29 +420,35 @@ async function processRun() {
           addOrUpdateLog(pg, e.message, 'error');
           throw e;
         }
-        const delaySec = Math.min(attempt * 5, 60);
-        addOrUpdateLog(pg, `Error – retrying in ${delaySec}s…`, 'active');
-        setStatus(`Page ${getDisplayPageNumber(pg, pagesToProcess)}: error, retrying in ${delaySec}s…`);
-        await wait(delaySec * 1000);
-        if (cancelRequested) {
-          currentRun.status = 'cancelled';
-          currentRun.updatedAt = Date.now();
-          await saveCurrentRun();
-          setStatus('Cancelled. You can start over or try with different slides.', false);
-          return;
+        if (attempt < MAX_ATTEMPTS) {
+          const delaySec = RETRY_DELAYS[attempt - 1];
+          addOrUpdateLog(pg, `Error – retrying in ${delaySec}s…`, 'active');
+          setStatus(`Page ${getDisplayPageNumber(pg, pagesToProcess)}: error, retrying in ${delaySec}s…`);
+          await wait(delaySec * 1000);
+          if (cancelRequested) {
+            currentRun.status = 'cancelled';
+            currentRun.updatedAt = Date.now();
+            await saveCurrentRun();
+            setStatus('Cancelled. You can start over or try with different slides.', false);
+            return;
+          }
+          setStatus(`Processing page ${getDisplayPageNumber(pg, pagesToProcess)} (${idx + 1} of ${pagesToProcess.length})…`);
+        } else {
+          addOrUpdateLog(pg, `Failed on all ${MAX_ATTEMPTS} attempts – skipping for now.`, 'error');
         }
-        setStatus(`Processing page ${getDisplayPageNumber(pg, pagesToProcess)} (${idx + 1} of ${pagesToProcess.length})…`);
       } finally {
         activeClaudeController = null;
       }
     }
 
-    currentRun.results.push(result);
-    currentRun.results.sort((a, b) => a.pg - b.pg);
-    currentRun.currentPage = pagesToProcess[idx + 1] || pg;
-    currentRun.updatedAt = Date.now();
-    await saveCurrentRun();
-    updateProgressUI();
+    if (result) {
+      currentRun.results.push(result);
+      currentRun.results.sort((a, b) => a.pg - b.pg);
+      currentRun.currentPage = pagesToProcess[idx + 1] || pg;
+      currentRun.updatedAt = Date.now();
+      await saveCurrentRun();
+      updateProgressUI();
+    }
 
     if (cancelRequested) {
       currentRun.status = 'cancelled';
@@ -459,6 +467,29 @@ async function processRun() {
     }
 
     if (idx < pagesToProcess.length - 1) await wait(280);
+  }
+
+  const remaining = pagesToProcess.filter(pg => !(currentRun.results || []).some(r => r.pg === pg));
+  if (remaining.length > 0 && pass < MAX_PASSES) {
+    setStatus(`${remaining.length} slide(s) pending – retrying in 60s (pass ${pass + 1}/${MAX_PASSES})…`);
+    await wait(60000);
+    if (cancelRequested) {
+      currentRun.status = 'cancelled';
+      currentRun.updatedAt = Date.now();
+      await saveCurrentRun();
+      setStatus('Cancelled. You can start over or try with different slides.', false);
+      return;
+    }
+    return processRun(pass + 1);
+  }
+
+  if (remaining.length > 0) {
+    currentRun.status = 'error';
+    currentRun.updatedAt = Date.now();
+    await saveCurrentRun();
+    setStatus(`${remaining.length} slide(s) could not be processed. Fix the issue and click Resume.`, false);
+    showErr(`${remaining.length} slide(s) failed after all retry attempts. Check your connection and click Resume to try again.`);
+    return;
   }
 
   setStatus('Building Word document…');
