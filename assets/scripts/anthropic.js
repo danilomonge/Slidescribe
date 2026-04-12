@@ -11,7 +11,9 @@ async function claude(key, model, prompt, b64, signal) {
   });
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
-    throw new Error(humanizeClaudeError(r.status, e));
+    const err = new Error(humanizeClaudeError(r.status, e));
+    err.retryable = r.status === 429 || r.status >= 500;
+    throw err;
   }
   return (await r.json()).content[0].text;
 }
