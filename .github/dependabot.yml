@@ -1,0 +1,11 @@
+# Keeps the GitHub Actions used by CI (pinned by commit SHA) up to date.
+# The app itself has no package dependencies; its CDN scripts are pinned in
+# index.html with Subresource Integrity hashes and updated by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
