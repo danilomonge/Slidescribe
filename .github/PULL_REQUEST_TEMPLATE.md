@@ -10,12 +10,12 @@
 
 <!-- Step-by-step instructions to verify the change manually. -->
 
-1. Open `index.html` in a browser (no build step needed).
-2. …
+1. Serve the folder (`python3 -m http.server 8080`) and open it.
+2. ...
 
 ## Checklist
 
-- [ ] Tested end-to-end with a real PDF (upload → generate → download)
+- [ ] `node --test 'tests/unit/*.test.mjs'` and `node tests/e2e/run.mjs` pass
+- [ ] Tried with a real PDF if the change affects what Claude returns
 - [ ] No new runtime dependencies added
 - [ ] No server-side code introduced
-- [ ] Works by opening `index.html` directly in a browser

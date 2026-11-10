@@ -2,198 +2,214 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SlideScribe — AI Lecture Explainer</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236c8fff'/%3E%3Cstop offset='100%25' stop-color='%23a78bfa'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Cpath d='M20 42L46 18L35 46L30 36L20 42Z' fill='white' fill-opacity='0.96'/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; worker-src blob: https://cdnjs.cloudflare.com; connect-src 'self' https://api.anthropic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; style-src 'self' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>SlideScribe, every slide explained</title>
+<meta name="description" content="Upload a lecture PDF and get a Word or PDF document in which Claude explains every page in plain language. Runs in your browser with your own Anthropic API key.">
+<meta name="theme-color" content="#080810">
+<meta property="og:type" content="website">
+<meta property="og:title" content="SlideScribe, every slide explained">
+<meta property="og:description" content="Upload a lecture PDF and get every page explained in plain language by Claude, as a Word or PDF document.">
+<meta property="og:url" content="https://danilomonge.github.io/Slidescribe/">
+<meta property="og:image" content="https://danilomonge.github.io/Slidescribe/docs/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,300;0,400;0,500;1,300;1,400&amp;family=DM+Mono:wght@300;400;500&amp;family=Jost:wght@300;400;500;600&amp;display=swap">
 <link rel="stylesheet" href="assets/styles/main.css">
 </head>
 <body>
 
-<!-- Ambient background -->
-<div class="bg-canvas">
+<div class="bg-canvas" aria-hidden="true">
   <div class="orb orb-1"></div>
   <div class="orb orb-2"></div>
   <div class="orb orb-3"></div>
-  <div class="paper-plane plane-1" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-2" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-3" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-4" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-5" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-6" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-7" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-8" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-9" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-10" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-11" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-12" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
-  <div class="paper-plane plane-13" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
+  <div class="paper-plane plane-1"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-2"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-3"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-4"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-5"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-6"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-7"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-8"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-9"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-10"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-11"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-12"><span data-icon="plane"></span></div>
+  <div class="paper-plane plane-13"><span data-icon="plane"></span></div>
 </div>
-<div class="bg-grid"></div>
+<div class="bg-grid" aria-hidden="true"></div>
 
 <div class="wrap">
 
-  <!-- Topbar -->
-  <nav class="topbar">
+  <header class="topbar">
     <div class="logo">
-      <div class="logo-icon"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M3 11.5 21 3 13 21l-2.8-6.7L3 11.5Z"/><path d="M10.2 14.3 21 3"/></svg></div>
+      <span class="logo-icon" data-icon="plane"></span>
       SlideScribe
     </div>
-    <div class="topbar-badge">AI Study Tool</div>
-  </nav>
-
-  <!-- Hero -->
-  <header class="hero">
-    <div class="hero-eyebrow">PDF to Word</div>
-    <h1>Every slide,<br><span class="hl">explained.</span></h1>
-    <p>Upload any lecture PDF and get a Word document with every page explained in plain language, in seconds.</p>
+    <div class="topbar-badge">AI study tool</div>
   </header>
 
-  <!-- Card 1: Upload -->
-  <div class="card">
-    <div class="step-label"><span class="step-num"><span>1</span></span> Upload your PDF</div>
+  <main>
+    <section class="hero">
+      <div class="hero-eyebrow">PDF to Word and PDF</div>
+      <h1>Every slide,<br><span class="hl">explained.</span></h1>
+      <p>Upload a lecture PDF and get a document in which Claude explains every page in plain language, ready to study from.</p>
+    </section>
 
-    <div class="drop-zone" id="dropZone">
-      <input type="file" id="fileInput" accept=".pdf">
-      <div class="drop-icon">📑</div>
-      <h3>Drop your PDF here</h3>
-      <p>Lecture slides, readings, handouts — any PDF works</p>
-    </div>
+    <section class="card" aria-labelledby="step1">
+      <h2 class="step-label" id="step1"><span class="step-num"><span>1</span></span> Upload your PDF</h2>
 
-    <div id="fileBadge" class="file-badge hidden">
-      <span class="fb-icon">📄</span>
-      <span class="fb-name" id="fileName">—</span>
-      <span class="fb-size" id="fileSize">—</span>
-    </div>
-
-    <div id="previewWrap" class="preview-wrap hidden">
-      <div class="preview-title" id="previewTitle">Preview</div>
-      <div class="thumbs" id="thumbGrid"></div>
-    </div>
-  </div>
-
-  <!-- Card 2: Configure -->
-  <div class="card">
-    <div class="step-label"><span class="step-num"><span>2</span></span> Configure</div>
-
-    <div class="field">
-      <label>Anthropic API Key</label>
-      <div class="key-field">
-        <input type="password" id="apiKey" placeholder="sk-ant-api03-…" autocomplete="off">
-        <button class="key-eye" id="keyEye" type="button">👁</button>
+      <div class="drop-zone" id="dropZone">
+        <input type="file" id="fileInput" accept="application/pdf,.pdf" aria-describedby="dropHint">
+        <span class="drop-icon" data-icon="upload"></span>
+        <h3>Drop your PDF here or click to choose one</h3>
+        <p id="dropHint">Lecture slides, readings, handouts. Any PDF works.</p>
       </div>
-      <p class="hint">Stays in your browser, only sent to <strong style="color:var(--text)">api.anthropic.com</strong>. Get one free at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></p>
-    </div>
 
-    <div class="field">
-      <div class="label-row">
-        <label for="promptTxt">Explanation Prompt</label>
-        <button type="button" class="field-link" id="promptClear">Clear</button>
+      <div id="fileBadge" class="file-badge hidden">
+        <span class="fb-icon" data-icon="file"></span>
+        <span class="fb-name" id="fileName"></span>
+        <span class="fb-size" id="fileSize"></span>
       </div>
-      <textarea id="promptTxt">Explica esto de una forma muy fácil, completa, pero no tan extensa (pero sin irte del tema principal y sin hacerlo extremadamente extenso) y con las palabras más importantes en alemán pero con la explicación en español, añadiendo títulos y subtítulos. Cada vez que aparezca un término técnico, nombre científico o abreviación, añade inmediatamente después una definición muy concisa entre paréntesis escrita de forma que fluya de manera natural dentro de la frase, sin interrumpir la lectura global.</textarea>
-      <p class="hint">Applied to every page. Edit freely — any language or style.</p>
-    </div>
 
-    <div class="grid-2">
+      <div id="previewWrap" class="preview-wrap hidden">
+        <div class="preview-head">
+          <div class="preview-title" id="previewTitle"></div>
+          <div class="preview-hint" id="previewHint"></div>
+        </div>
+        <div class="thumbs" id="thumbGrid"></div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="step2">
+      <h2 class="step-label" id="step2"><span class="step-num"><span>2</span></span> Configure</h2>
+
       <div class="field">
-        <label>Model</label>
-        <select id="model">
-          <option value="claude-haiku-4-5-20251001" selected>Haiku 4.5 (fast &amp; cheap)</option>
-          <option value="claude-sonnet-4-6">Sonnet 4.6 (recommended)</option>
-        </select>
+        <label for="apiKey">Anthropic API key</label>
+        <div class="key-field">
+          <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" aria-describedby="keyHint">
+          <button class="key-eye" id="keyEye" type="button" aria-label="Show API key" aria-pressed="false"><span data-icon="eye"></span></button>
+        </div>
+        <p class="hint" id="keyHint">Kept only in this browser tab and sent only to <span class="hint-strong">api.anthropic.com</span>. Create a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.</p>
       </div>
-      <div class="field">
-        <label>Render Quality</label>
-        <select id="scale">
-          <option value="1.5">Normal (1.5×)</option>
-          <option value="2" selected>High (2×)</option>
-          <option value="2.5">Very high (2.5×)</option>
-        </select>
-      </div>
-    </div>
 
-    <div class="grid-2">
-      <div class="field">
-        <label>From Page</label>
-        <input type="number" id="pgFrom" value="1" min="1">
+      <div class="grid-2">
+        <div class="field">
+          <label for="language">Explanation language</label>
+          <select id="language"></select>
+        </div>
+        <div class="field">
+          <label for="model">Model</label>
+          <select id="model"></select>
+        </div>
       </div>
+
       <div class="field">
         <div class="label-row">
-          <label for="pgTo">To Page</label>
-          <button type="button" class="field-link" id="pgToReset">All</button>
+          <label for="promptTxt">Instructions for each page</label>
+          <button type="button" class="field-link" id="promptReset">Reset to default</button>
         </div>
-        <input type="number" id="pgTo" value="" min="1" placeholder="All">
+        <textarea id="promptTxt" rows="5" aria-describedby="promptHint"></textarea>
+        <p class="hint" id="promptHint">Applied to every page. Change the tone, the depth or what to focus on; your instructions are remembered on this device.</p>
       </div>
-    </div>
-  </div>
 
-  <!-- Card 3: Generate -->
-  <div class="card">
-    <div class="step-label"><span class="step-num"><span>3</span></span> Generate</div>
-    <button class="cta" id="runBtn" disabled>
-      <span style="font-size:1rem">▶</span> Generate explanations &amp; export Word
-    </button>
-    <div class="cta-row">
-      <button class="cta-secondary" id="pauseBtn" type="button" disabled>Pause</button>
-      <button class="cta-secondary" id="cancelBtn" type="button" disabled>Cancel</button>
-      <button class="cta-secondary" id="resetBtn" type="button" disabled>Start With Other Slides</button>
-    </div>
-    <p class="hint" style="text-align:center;margin-top:.65rem">Each page is explained by AI and embedded into a downloadable <strong style="color:var(--text)">.docx</strong></p>
-  </div>
-
-  <!-- Progress -->
-  <div class="prog-card hidden" id="progCard">
-    <div class="prog-top">
-      <div class="prog-status" id="statusEl"><div class="spin"></div><span>Starting…</span></div>
-      <div class="prog-pct" id="pctEl">0%</div>
-    </div>
-    <div class="prog-bar-bg"><div class="prog-bar-fill" id="barFill"></div></div>
-    <div class="log-feed" id="logFeed"></div>
-  </div>
-
-  <!-- Error -->
-  <div class="banner banner-err hidden" id="errBanner">
-    <span class="banner-icon">⚠</span>
-    <span id="errMsg">Something went wrong.</span>
-  </div>
-
-  <!-- Done -->
-  <div id="doneWrap" class="hidden">
-    <div class="banner banner-ok">
-      <span class="banner-icon">✦</span>
-      <span>All pages processed. Your Word document is ready.</span>
-    </div>
-    <div class="dl-row">
-      <button class="cta-dl" id="dlBtn">⬇ &nbsp;Download explained .docx</button>
-      <button class="cta-dl alt" id="pdfBtn">⬇ &nbsp;Download explained .pdf</button>
-    </div>
-  </div>
-
-  <div id="pageModal" class="page-modal hidden" aria-hidden="true">
-    <div class="page-modal-card" id="pageModalCard" role="dialog" aria-modal="true" aria-labelledby="pageModalTitle">
-      <div class="page-modal-top">
-        <div class="page-modal-title" id="pageModalTitle">Page Overview</div>
-        <button class="page-modal-close" id="pageModalClose" type="button" aria-label="Close page overview">×</button>
+      <div class="grid-3">
+        <div class="field">
+          <label for="scale">Image quality</label>
+          <select id="scale">
+            <option value="1.5">Standard</option>
+            <option value="2" selected>High</option>
+            <option value="2.5">Very high</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="pgFrom">From page</label>
+          <input type="number" id="pgFrom" min="1" inputmode="numeric" placeholder="First">
+        </div>
+        <div class="field">
+          <div class="label-row">
+            <label for="pgTo">To page</label>
+            <button type="button" class="field-link" id="pgToReset">All</button>
+          </div>
+          <input type="number" id="pgTo" min="1" inputmode="numeric" placeholder="Last">
+        </div>
       </div>
-      <div class="page-modal-body">
-        <canvas id="pageModalCanvas" class="page-modal-canvas"></canvas>
+    </section>
+
+    <section class="card" aria-labelledby="step3">
+      <h2 class="step-label" id="step3"><span class="step-num"><span>3</span></span> Generate</h2>
+      <button class="cta" id="runBtn" type="button" disabled><span data-icon="sparkle"></span><span>Generate explanations</span></button>
+      <div class="cta-row">
+        <button class="cta-secondary" id="pauseBtn" type="button" disabled><span data-icon="pause"></span><span>Pause</span></button>
+        <button class="cta-secondary" id="cancelBtn" type="button" disabled><span data-icon="stop"></span><span>Cancel</span></button>
+        <button class="cta-secondary" id="resetBtn" type="button" disabled><span data-icon="restart"></span><span>Start over</span></button>
       </div>
+      <p class="hint hint-center" id="estimate" aria-live="polite"></p>
+    </section>
+
+    <section class="prog-card hidden" id="progCard" aria-label="Progress">
+      <div class="prog-top">
+        <div class="prog-status" id="statusEl" role="status" aria-live="polite"></div>
+        <div class="prog-pct" id="pctEl" aria-hidden="true">0%</div>
+      </div>
+      <div class="prog-bar-bg" id="progBar" role="progressbar" aria-label="Pages explained" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="prog-bar-fill" id="barFill"></div></div>
+      <p class="prog-cost" id="costEl"></p>
+      <div class="log-feed" id="logFeed" aria-label="Pages"></div>
+    </section>
+
+    <div class="banner banner-err hidden" id="errBanner" role="alert">
+      <span class="banner-icon" data-icon="alert"></span>
+      <span id="errMsg"></span>
+    </div>
+
+    <section id="doneWrap" class="hidden" aria-label="Result">
+      <div class="banner banner-ok">
+        <span class="banner-icon" data-icon="check"></span>
+        <span id="doneMsg"></span>
+      </div>
+      <div class="dl-row">
+        <button class="cta-dl" id="dlBtn" type="button"><span data-icon="download"></span><span>Download Word (.docx)</span></button>
+        <button class="cta-dl alt" id="pdfBtn" type="button"><span data-icon="download"></span><span>Download PDF</span></button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>SlideScribe runs in your browser. Your PDF and API key go only to the Anthropic API, and nothing is stored on any server.</p>
+    <p><a href="https://github.com/danilomonge/Slidescribe" target="_blank" rel="noopener noreferrer">Source code</a> <span aria-hidden="true">/</span> MIT License</p>
+  </footer>
+
+</div>
+
+<div id="pageModal" class="page-modal hidden" aria-hidden="true">
+  <div class="page-modal-card" role="dialog" aria-modal="true" aria-labelledby="pageModalTitle">
+    <div class="page-modal-top">
+      <h2 class="page-modal-title" id="pageModalTitle">Page</h2>
+      <button class="page-modal-close" id="pageModalClose" type="button" aria-label="Close"><span data-icon="close"></span></button>
+    </div>
+    <div class="page-modal-body">
+      <canvas id="pageModalCanvas" class="page-modal-canvas"></canvas>
     </div>
   </div>
+</div>
 
-</div><!-- /wrap -->
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js" integrity="sha384-4xaIisuLEy2lo2HkB2C4rEf7v8jbTb2kuogX6TkuEt9feTWKBSFSOzsqNNbV+sKh" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/jspdf.umd.min.js" integrity="sha384-qovJwSBbRDPP5cEjCp8S0UP66wrvnjaa60XMOGzTNanrThcrGfXfnZkvgY8N1KT3" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="assets/scripts/config.js"></script>
+<script src="assets/scripts/pdf-coverage.js"></script>
+<script src="assets/scripts/markdown.js"></script>
+<script src="assets/scripts/icons.js"></script>
 <script src="assets/scripts/state.js"></script>
-<script src="assets/scripts/core.js"></script>
-<script src="assets/scripts/undo.js"></script>
+<script src="assets/scripts/helpers.js"></script>
 <script src="assets/scripts/anthropic.js"></script>
 <script src="assets/scripts/exporters.js"></script>
+<script src="assets/scripts/core.js"></script>
+<script src="assets/scripts/undo.js"></script>
 <script src="assets/scripts/paper-planes.js"></script>
-<script src="assets/scripts/helpers.js"></script>
 <script src="assets/scripts/bootstrap.js"></script>
 </body>
 </html>

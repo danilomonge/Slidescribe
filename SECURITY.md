@@ -4,9 +4,13 @@
 
 SlideScribe never transmits your Anthropic API key to any server other than `api.anthropic.com`.
 
-- The key is stored only in `sessionStorage` for the duration of the browser tab — it is cleared when the tab is closed.
+- The key is stored only in `sessionStorage` for the duration of the browser tab; it is cleared when the tab is closed.
 - No analytics, telemetry, or third-party scripts receive any user data.
 - All PDF processing and document generation happen entirely in the browser.
+- A Content Security Policy limits network connections to `api.anthropic.com` and scripts to the page itself and two CDNs.
+- Every CDN script is pinned to an exact version with a Subresource Integrity hash, so a modified file is refused.
+- PDF.js runs with `isEvalSupported: false` and the policy blocks `eval`, which closes CVE-2024-4367 for malicious PDFs.
+- Text returned by the API is always inserted as text, never as HTML.
 
 ## Reporting a vulnerability
 
