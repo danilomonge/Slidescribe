@@ -21,3 +21,6 @@ node_modules/
 # Environment / secrets
 .env
 .env.local
+
+# End-to-end test output (screenshots and downloads)
+tests/e2e/output/

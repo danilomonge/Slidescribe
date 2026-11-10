@@ -1,689 +1,660 @@
-async function load(f) {
-  if (!f?.name.toLowerCase().endsWith('.pdf')) { showErr('Please select a valid .pdf file.'); return; }
-  const bytes = await f.arrayBuffer();
-  await loadPdfSource(bytes, { name: f.name, size: f.size }, { resetProgress: true });
+// ── Loading a PDF ────────────────────────────────────────────────
+async function loadFile(file) {
+  if (!file) return;
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+  if (!isPdf) { showError('Please choose a PDF file.'); return; }
+  if (isRunning) { showError('Pause or cancel the current run before loading another PDF.'); return; }
+  hideError();
+  await loadPdfSource(await file.arrayBuffer(), { name: file.name, size: file.size }, { fresh: true });
 }
 
-async function loadPdfSource(bytes, meta, opts = {}) {
-  const { resetProgress = false } = opts;
+async function loadPdfSource(bytes, meta, { fresh = false, selection = null } = {}) {
   closePageModal();
+  try {
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes.slice(0)), isEvalSupported: false }).promise;
+    pdf = doc;
+  } catch (error) {
+    showError(`This PDF could not be opened. ${error?.message || ''}`.trim());
+    return false;
+  }
   pdfBuffer = bytes;
   pdfFileMeta = { name: meta.name, size: meta.size };
   fileName.textContent = meta.name;
-  fileSize.textContent = (meta.size / 1024).toFixed(1) + ' KB';
+  fileSize.textContent = `${formatBytes(meta.size)}, ${pdf.numPages} ${pdf.numPages === 1 ? 'page' : 'pages'}`;
   fileBadge.classList.remove('hidden');
-  setStatus('Loading PDF…', true);
-  progCard.classList.remove('hidden');
-  try {
-    pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
-    const n = pdf.numPages;
-    if (resetProgress) initializePageSelection(n);
-    else if (currentRun?.selectedPages?.length) initializePageSelection(n, currentRun.selectedPages);
-    else initializePageSelection(n);
-    syncPageInputs();
-    if (resetProgress) {
-      logFeed.innerHTML = '';
-      clearLogs();
-      doneWrap.classList.add('hidden');
-      removeGeneratedPreview();
-      errBanner.classList.add('hidden');
-      barFill.style.width = '0%';
-      pctEl.textContent = '0%';
-      activeBlob = null;
-      activePdfBlob = null;
-      currentRun = null;
-      await deleteSavedRun();
-    }
-    setStatus(`Loaded — ${n} pages`, false);
-    progCard.classList.add('hidden');
-    await renderPreview();
-    checkReady();
-    refreshActionButtons();
-  } catch (e) {
-    showErr('Failed to load PDF: ' + e.message);
-    progCard.classList.add('hidden');
+
+  if (fresh) {
+    await discardRun();
+    pgFrom.value = '';
+    pgTo.value = '';
   }
+  initializePageSelection(pdf.numPages, selection);
+  syncPageInputs();
+  const first = (await pdf.getPage(1)).getViewport({ scale: 1 });
+  const ratio = first.width / first.height;
+  thumbGrid.style.setProperty('--thumb-ratio', ratio.toFixed(4));
+  thumbGrid.classList.toggle('landscape', ratio > 1.1);
+  renderPreview();
+  refreshUI();
+  return true;
 }
 
-async function renderPreview() {
+// ── Page selection ───────────────────────────────────────────────
+// Pages are always referred to by their number in the original PDF.
+function sanitizePages(totalPages, pages) {
+  const unique = Array.from(new Set((Array.isArray(pages) ? pages : [])
+    .map(value => parseInt(value, 10))
+    .filter(value => Number.isInteger(value) && value >= 1 && value <= totalPages)))
+    .sort((a, b) => a - b);
+  return unique.length ? unique : Array.from({ length: totalPages }, (_, idx) => idx + 1);
+}
+
+function initializePageSelection(totalPages, pages = null) {
+  selectedPages = sanitizePages(totalPages, pages);
+  pageSelectionHistory = { stack: [selectedPages.slice()], index: 0 };
+}
+
+// Once pages have been explained, the selection is locked so a stray click
+// cannot discard them; Start over unlocks it.
+function canEditPageSelection() {
+  return !!pdf && !isRunning && !(currentRun && pageResults.size);
+}
+
+function setSelectedPages(pages, { pushHistory = false } = {}) {
   if (!pdf) return;
-  const renderToken = ++previewRenderToken;
-  const n = pdf.numPages;
-  const pages = selectedPages.slice();
-  const canEditSelection = canEditPageSelection();
-  thumbGrid.innerHTML = '';
+  const next = sanitizePages(pdf.numPages, pages);
+  if (next.join(',') === selectedPages.join(',')) return;
+  invalidateFinishedRun();
+  selectedPages = next;
+  if (pushHistory) {
+    pageSelectionHistory.stack = pageSelectionHistory.stack.slice(0, pageSelectionHistory.index + 1);
+    pageSelectionHistory.stack.push(next.slice());
+    if (pageSelectionHistory.stack.length > 150) pageSelectionHistory.stack.shift();
+    pageSelectionHistory.index = pageSelectionHistory.stack.length - 1;
+  }
+  renderPreview();
+  refreshUI();
+}
+
+function removePageFromSelection(pg) {
+  if (!canEditPageSelection() || !selectedPages.includes(pg)) return;
+  if (selectedPages.length === 1) { showError('At least one page has to stay selected.'); return; }
+  setSelectedPages(selectedPages.filter(page => page !== pg), { pushHistory: true });
+}
+
+function undoPageSelection() {
+  if (!canEditPageSelection() || pageSelectionHistory.index <= 0) return;
+  pageSelectionHistory.index -= 1;
+  setSelectedPages(pageSelectionHistory.stack[pageSelectionHistory.index]);
+}
+
+function redoPageSelection() {
+  if (!canEditPageSelection() || pageSelectionHistory.index >= pageSelectionHistory.stack.length - 1) return;
+  pageSelectionHistory.index += 1;
+  setSelectedPages(pageSelectionHistory.stack[pageSelectionHistory.index]);
+}
+
+function pageRange() {
+  const total = pdf?.numPages || 1;
+  const from = Math.min(Math.max(parseInt(pgFrom.value, 10) || 1, 1), total);
+  const to = Math.min(Math.max(parseInt(pgTo.value, 10) || total, from), total);
+  return { from, to };
+}
+
+function pagesToProcess() {
+  const { from, to } = pageRange();
+  return selectedPages.filter(pg => pg >= from && pg <= to);
+}
+
+function syncPageInputs() {
+  if (!pdf) return;
+  const total = pdf.numPages;
+  pgFrom.max = String(total);
+  pgTo.max = String(total);
+  for (const input of [pgFrom, pgTo]) {
+    const value = parseInt(input.value, 10);
+    if (!Number.isNaN(value)) input.value = String(Math.min(Math.max(value, 1), total));
+  }
+  const from = parseInt(pgFrom.value, 10);
+  const to = parseInt(pgTo.value, 10);
+  if (!Number.isNaN(from) && !Number.isNaN(to) && to < from) pgTo.value = String(from);
+}
+
+// ── Thumbnails (rendered when they scroll into view) ─────────────
+let thumbObserver = null;
+
+function renderPreview() {
+  if (!pdf) { previewWrap.classList.add('hidden'); return; }
+  const token = ++previewRenderToken;
+  thumbObserver?.disconnect();
+  thumbObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      thumbObserver.unobserve(entry.target);
+      drawThumbnail(entry.target, Number(entry.target.dataset.page), token);
+    }
+  }, { root: thumbGrid, rootMargin: '200px' });
+
+  const editable = canEditPageSelection();
+  previewHint.textContent = editable
+    ? 'Click a page to view it. Use the bin to leave it out; Ctrl or Cmd + Z undoes.'
+    : 'Click a page to view it. To change which pages are explained, click Start over.';
+  const total = pdf.numPages;
+  previewTitle.textContent = selectedPages.length === total
+    ? `All ${total} ${total === 1 ? 'page' : 'pages'}`
+    : `${selectedPages.length} of ${total} pages selected`;
   previewWrap.classList.remove('hidden');
-  previewTitle.textContent = pages.length === n
-    ? `Preview — ${n} page${n>1?'s':''}`
-    : `Preview — ${pages.length} of ${n} page${n>1?'s':''}`;
-  for (const pageNumber of pages.slice(0, 24)) {
-    const displayPage = getDisplayPageNumber(pageNumber, pages);
-    const w = document.createElement('div'); w.className = 'thumb';
-    w.setAttribute('role', 'button');
-    w.setAttribute('tabindex', '0');
-    w.setAttribute('aria-label', `Open page ${displayPage} overview`);
-    if (canEditSelection) {
-      const del = document.createElement('button');
-      del.className = 'thumb-del';
-      del.type = 'button';
-      del.setAttribute('aria-label', `Remove page ${displayPage}`);
-      del.title = `Remove page ${displayPage}`;
-      del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>';
-      del.addEventListener('click', e => {
-        e.stopPropagation();
-        removePageFromSelection(pageNumber);
-      });
-      w.appendChild(del);
+  thumbGrid.replaceChildren(...selectedPages.map(pg => {
+    const thumb = el('div', { className: 'thumb', role: 'button', tabIndex: 0, 'aria-label': `Show page ${pg}` });
+    thumb.dataset.page = String(pg);
+    if (editable) {
+      const remove = el('button', { type: 'button', className: 'thumb-del', title: `Leave out page ${pg}`, 'aria-label': `Leave out page ${pg}` });
+      remove.append(icon('trash'));
+      remove.addEventListener('click', event => { event.stopPropagation(); removePageFromSelection(pg); });
+      thumb.append(remove);
     }
-    const cv = document.createElement('canvas'); w.appendChild(cv);
-    const p = document.createElement('span'); p.className = 'pg'; p.textContent = displayPage; w.appendChild(p);
-    thumbGrid.appendChild(w);
-    w.addEventListener('click', () => openPageModal(pageNumber));
-    w.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openPageModal(pageNumber);
-      }
+    thumb.append(el('canvas', { 'aria-hidden': 'true' }), el('span', { className: 'pg', text: String(pg) }));
+    thumb.addEventListener('click', () => openPageModal(pg));
+    thumb.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPageModal(pg); }
     });
-    const page = await pdf.getPage(pageNumber);
-    const vp = page.getViewport({ scale: 0.26 });
-    cv.width = vp.width; cv.height = vp.height;
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    if (renderToken !== previewRenderToken) return;
-  }
-  if (pages.length > 24) {
-    if (renderToken !== previewRenderToken) return;
-    const m = document.createElement('div');
-    m.className = 'thumb-more';
-    m.textContent = `+${pages.length-24} more`;
-    thumbGrid.appendChild(m);
+    thumbObserver.observe(thumb);
+    return thumb;
+  }));
+}
+
+async function drawThumbnail(thumb, pg, token) {
+  try {
+    const page = await pdf.getPage(pg);
+    if (token !== previewRenderToken) return;
+    const viewport = page.getViewport({ scale: 0.3 });
+    const canvas = thumb.querySelector('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+  } catch (error) {
+    console.warn(`Could not draw page ${pg}`, error);
   }
 }
 
-async function openPageModal(pageNumber) {
-  if (!pdf) return;
-  pageModalTitle.textContent = `Page ${getDisplayPageNumber(pageNumber)} Overview`;
+// ── Page viewer ──────────────────────────────────────────────────
+let modalReturnFocus = null;
+
+function showModal(title) {
+  modalReturnFocus = document.activeElement;
+  pageModalTitle.textContent = title;
   pageModal.classList.remove('hidden');
   pageModal.setAttribute('aria-hidden', 'false');
+  pageModalClose.focus();
+}
 
-  const page = await pdf.getPage(pageNumber);
-  const maxWidth = Math.min(window.innerWidth - 96, 860);
-  const baseViewport = page.getViewport({ scale: 1 });
-  const scale = Math.max(1, maxWidth / baseViewport.width);
-  const viewport = page.getViewport({ scale });
-  pageModalCanvas.width = viewport.width;
-  pageModalCanvas.height = viewport.height;
+async function openPageModal(pg) {
+  if (!pdf) return;
+  showModal(`Page ${pg}`);
+  const page = await pdf.getPage(pg);
+  const base = page.getViewport({ scale: 1 });
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.min(window.innerWidth - 64, 900);
+  const viewport = page.getViewport({ scale: (width / base.width) * ratio });
+  pageModalCanvas.width = Math.round(viewport.width);
+  pageModalCanvas.height = Math.round(viewport.height);
   const ctx = pageModalCanvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, pageModalCanvas.width, pageModalCanvas.height);
   await page.render({ canvasContext: ctx, viewport }).promise;
 }
 
-async function openImageModal(src, title = 'Page Overview') {
-  pageModalTitle.textContent = title;
-  pageModal.classList.remove('hidden');
-  pageModal.setAttribute('aria-hidden', 'false');
-
+async function openImageModal(src, title) {
+  showModal(title);
   const img = await loadImage(src);
-  const maxWidth = Math.min(window.innerWidth - 96, 860);
-  const scale = Math.min(1, maxWidth / img.width);
-  pageModalCanvas.width = img.width * scale;
-  pageModalCanvas.height = img.height * scale;
-  const ctx = pageModalCanvas.getContext('2d');
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, pageModalCanvas.width, pageModalCanvas.height);
-  ctx.drawImage(img, 0, 0, pageModalCanvas.width, pageModalCanvas.height);
+  pageModalCanvas.width = img.naturalWidth;
+  pageModalCanvas.height = img.naturalHeight;
+  pageModalCanvas.getContext('2d').drawImage(img, 0, 0);
 }
 
 function closePageModal() {
+  if (pageModal.classList.contains('hidden')) return;
   pageModal.classList.add('hidden');
   pageModal.setAttribute('aria-hidden', 'true');
+  modalReturnFocus?.focus?.();
+  modalReturnFocus = null;
 }
 
-function canEditPageSelection() {
-  return !!pdf && !isRunning;
+// ── Readiness and cost estimate ──────────────────────────────────
+function hasValidKey() {
+  return /^sk-ant-/.test(apiKey.value.trim());
 }
 
-function prepareSelectionEdit() {
-  if (!currentRun) return;
-  currentRun = null;
-  activeBlob = null;
-  activePdfBlob = null;
-  doneWrap.classList.add('hidden');
-  removeGeneratedPreview();
-  logFeed.innerHTML = '';
-  clearLogs();
-  errBanner.classList.add('hidden');
-  barFill.style.width = '0%';
-  pctEl.textContent = '0%';
-  setStatus('Ready with updated page selection', false);
-  void deleteSavedRun();
-  refreshActionButtons();
+function refreshUI() {
+  const pages = pdf ? pagesToProcess() : [];
+  const status = currentRun?.status;
+  runBtn.disabled = isRunning || !pdf || !hasValidKey() || !pages.length;
+
+  const resumable = !isRunning && (status === 'paused' || status === 'error');
+  pauseBtn.disabled = !(isRunning || resumable) || cancelRequested || pauseRequested;
+  setButtonLabel(pauseBtn, resumable ? 'Resume' : (pauseRequested ? 'Pausing' : 'Pause'), resumable ? 'play' : 'pause');
+  cancelBtn.disabled = !(isRunning || status === 'paused' || status === 'error') || cancelRequested;
+  resetBtn.disabled = !pdf && !currentRun;
+
+  for (const control of [languageSel, promptTxt, modelSel, scaleSel, pgFrom, pgTo]) control.disabled = isRunning;
+  fileInput.disabled = isRunning;
+  dropZone.classList.toggle('disabled', isRunning);
+  updateEstimate(pages);
 }
 
-function sanitizeSelectedPages(totalPages, pages) {
-  const valid = Array.isArray(pages) ? pages : [];
-  const uniqueSorted = Array.from(new Set(valid
-    .map(value => parseInt(value, 10))
-    .filter(value => Number.isInteger(value) && value >= 1 && value <= totalPages)
-  )).sort((a, b) => a - b);
-  if (uniqueSorted.length) return uniqueSorted;
-  return Array.from({ length: totalPages }, (_, idx) => idx + 1);
+function setButtonLabel(button, label, iconName) {
+  button.replaceChildren(icon(iconName), el('span', { text: label }));
 }
 
-function initializePageSelection(totalPages, initialPages) {
-  selectedPages = sanitizeSelectedPages(totalPages, initialPages);
-  pageSelectionHistory = {
-    stack: [selectedPages.slice()],
-    index: 0
-  };
+async function updateEstimate(pages = pdf ? pagesToProcess() : []) {
+  if (!pdf || !pages.length) { estimateEl.textContent = ''; return; }
+  try {
+    const page = await pdf.getPage(pages[0]);
+    const size = renderSize(page, parseFloat(scaleSel.value));
+    const model = MODELS[modelSel.value];
+    const cost = estimateRunCost(modelSel.value, pages.length, size.width, size.height);
+    estimateEl.textContent = `About ${formatUsd(cost)} for ${pages.length} ${pages.length === 1 ? 'page' : 'pages'} with ${model.name}. You only pay Anthropic for what you use.`;
+  } catch {
+    estimateEl.textContent = '';
+  }
 }
 
-function getDisplayPageNumber(pageNumber, pageList = null) {
-  const pages = Array.isArray(pageList) && pageList.length
-    ? pageList
-    : (currentRun?.selectedPages?.length ? currentRun.selectedPages : selectedPages);
-  const index = pages.indexOf(pageNumber);
-  return index >= 0 ? index + 1 : pageNumber;
+// ── Rendering a page for Claude ──────────────────────────────────
+function renderSize(page, scale) {
+  const base = page.getViewport({ scale });
+  const longest = Math.max(base.width, base.height);
+  const factor = longest > MAX_IMAGE_EDGE ? MAX_IMAGE_EDGE / longest : 1;
+  return { scale: scale * factor, width: Math.round(base.width * factor), height: Math.round(base.height * factor) };
 }
 
-function getSelectablePageCount() {
-  return selectedPages.length || pdf?.numPages || 1;
+async function renderPageImage(pg, scale) {
+  const page = await pdf.getPage(pg);
+  const size = renderSize(page, scale);
+  const viewport = page.getViewport({ scale: size.scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const b64 = canvas.toDataURL('image/jpeg', JPEG_QUALITY).split(',')[1];
+  const image = { b64, width: canvas.width, height: canvas.height };
+  canvas.width = 0;
+  canvas.height = 0;
+  return image;
 }
 
-function getSelectedPagesInRange() {
-  const total = getSelectablePageCount();
-  const from = Math.max(1, Math.min(parseInt(pgFrom.value, 10) || 1, total));
-  const to = Math.max(from, Math.min(parseInt(pgTo.value, 10) || total, total));
+// ── Running ──────────────────────────────────────────────────────
+function createRun() {
+  const pages = pagesToProcess();
+  if (!pages.length) { showError('No pages are selected in this range.'); return null; }
+  const { from, to } = pageRange();
   return {
-    from,
-    to,
-    pages: selectedPages.slice(from - 1, to)
-  };
-}
-
-function applySelectedPages(pages, { pushHistory = false } = {}) {
-  if (!pdf) return;
-  const nextPages = sanitizeSelectedPages(pdf.numPages, pages);
-  const sameAsCurrent = selectedPages.length === nextPages.length
-    && selectedPages.every((page, idx) => page === nextPages[idx]);
-  if (sameAsCurrent) return;
-
-  selectedPages = nextPages;
-  if (pushHistory) {
-    const currentSnap = pageSelectionHistory.stack[pageSelectionHistory.index] || [];
-    const sameAsSnap = currentSnap.length === nextPages.length
-      && currentSnap.every((page, idx) => page === nextPages[idx]);
-    if (!sameAsSnap) {
-      pageSelectionHistory.stack = pageSelectionHistory.stack.slice(0, pageSelectionHistory.index + 1);
-      pageSelectionHistory.stack.push(nextPages.slice());
-      if (pageSelectionHistory.stack.length > 150) pageSelectionHistory.stack.shift();
-      pageSelectionHistory.index = pageSelectionHistory.stack.length - 1;
-    }
-  }
-
-  syncPageInputs();
-  void renderPreview();
-  checkReady();
-}
-
-function removePageFromSelection(pageNumber) {
-  if (!canEditPageSelection()) return;
-  if (!selectedPages.includes(pageNumber)) return;
-  prepareSelectionEdit();
-  applySelectedPages(selectedPages.filter(page => page !== pageNumber), { pushHistory: true });
-}
-
-function undoPageSelection() {
-  if (!canEditPageSelection()) return;
-  if (pageSelectionHistory.index <= 0) return;
-  prepareSelectionEdit();
-  pageSelectionHistory.index -= 1;
-  selectedPages = pageSelectionHistory.stack[pageSelectionHistory.index].slice();
-  void renderPreview();
-  checkReady();
-}
-
-function redoPageSelection() {
-  if (!canEditPageSelection()) return;
-  if (pageSelectionHistory.index >= pageSelectionHistory.stack.length - 1) return;
-  prepareSelectionEdit();
-  pageSelectionHistory.index += 1;
-  selectedPages = pageSelectionHistory.stack[pageSelectionHistory.index].slice();
-  void renderPreview();
-  checkReady();
-}
-
-function syncPageInputs(changed = '') {
-  if (!pdf) return;
-  const maxPages = getSelectablePageCount();
-  pgFrom.max = maxPages;
-  pgTo.max = maxPages;
-  let fromValue = parseInt(pgFrom.value, 10);
-  let toValue = parseInt(pgTo.value, 10);
-
-  if (!Number.isNaN(fromValue)) {
-    fromValue = Math.min(Math.max(fromValue, 1), maxPages);
-    pgFrom.value = String(fromValue);
-  }
-  if (!Number.isNaN(toValue)) {
-    toValue = Math.min(Math.max(toValue, 1), maxPages);
-    pgTo.value = String(toValue);
-  }
-
-  fromValue = parseInt(pgFrom.value, 10);
-  toValue = parseInt(pgTo.value, 10);
-  if (!Number.isNaN(fromValue) && !Number.isNaN(toValue) && toValue < fromValue) {
-    if (changed === 'from' || changed === 'to') pgTo.value = String(fromValue);
-  }
-}
-
-function getRunConfig() {
-  if (!pdf || !pdfBuffer || !pdfFileMeta) return null;
-  const key = apiKey.value.trim();
-  const prompt = promptTxt.value.trim();
-  const model = modelSel.value;
-  const scale = parseFloat(scaleSel.value);
-  const { from, to, pages: pagesInRange } = getSelectedPagesInRange();
-  if (!pagesInRange.length) {
-    showErr('There are no selected pages in the current range. Restore a page or change From/To Page.');
-    return null;
-  }
-  return {
-    version: 1,
+    version: 2,
     fileName: pdfFileMeta.name,
     fileSize: pdfFileMeta.size,
-    pdfBytes: pdfBuffer.slice(0),
     numPages: pdf.numPages,
-    prompt,
-    model,
-    scale,
+    prompt: promptTxt.value.trim() || DEFAULT_PROMPT,
+    language: languageSel.value,
+    model: modelSel.value,
+    scale: parseFloat(scaleSel.value),
+    selection: selectedPages.slice(),
+    pages,
     from,
-    to: Math.max(to, from),
-    selectedPages: pagesInRange,
-    results: [],
+    to,
+    status: 'running',
+    usage: { input: 0, output: 0 },
     logs: [],
-    status: 'idle',
-    currentPage: pagesInRange[0],
     updatedAt: Date.now()
   };
 }
 
-function checkReady() {
-  const hasSelectedInRange = !!pdf && getSelectedPagesInRange().pages.length > 0;
-  runBtn.disabled = !(pdf && apiKey.value.trim().startsWith('sk-') && hasSelectedInRange) || isRunning;
-}
-
-async function startProcessing(options = {}) {
-  const { resume = false } = options;
-  if (isRunning) return;
-  errBanner.classList.add('hidden');
-  doneWrap.classList.add('hidden');
+async function startProcessing({ resume = false } = {}) {
+  if (isRunning || !pdf) return;
+  if (!hasValidKey()) { showError('Add your Anthropic API key first.'); apiKey.focus(); return; }
+  hideError();
 
   if (!resume || !currentRun) {
-    const config = getRunConfig();
-    if (!config) return;
-    currentRun = config;
-    currentRun.logs = [];
-    currentRun.results = [];
-    currentRun.currentPage = currentRun.selectedPages[0];
-    logFeed.innerHTML = '';
-    clearLogs();
-    barFill.style.width = '0%';
-    pctEl.textContent = '0%';
-  } else {
-    currentRun.status = 'running';
+    if (currentRun && pageResults.size) {
+      const message = currentRun.status === 'done'
+        ? 'Generate again? The current explanations will be replaced.'
+        : `Start a new run? The ${pageResults.size} ${pageResults.size === 1 ? 'page' : 'pages'} explained so far will be discarded. Use Resume to continue instead.`;
+      if (!window.confirm(message)) return;
+    }
+    const run = createRun();
+    if (!run) return;
+    await discardRun();
+    currentRun = run;
+    try { await idbSet(PDF_KEY, pdfBuffer.slice(0)); } catch (error) { console.warn('Could not save the PDF', error); }
   }
 
   pauseRequested = false;
   cancelRequested = false;
   isRunning = true;
+  let finish;
+  runFinished = new Promise(resolve => { finish = resolve; });
+  runAbort = new AbortController();
+  pauseAbort = new AbortController();
   currentRun.status = 'running';
-  currentRun.updatedAt = Date.now();
-  await saveCurrentRun();
-  refreshActionButtons();
+  await saveRunMeta();
+  showResults(false);
   progCard.classList.remove('hidden');
-  hydrateLogsFromRun();
+  renderPreview();
+  refreshUI();
+  updateProgress();
 
   try {
     await processRun();
-  } catch (e) {
+  } catch (error) {
+    console.error(error);
     currentRun.status = 'error';
-    currentRun.updatedAt = Date.now();
-    await saveCurrentRun();
-    showErr('Unexpected error: ' + e.message);
-    setStatus('Error', false);
+    await saveRunMeta();
+    showError(`Something went wrong: ${error?.message || error}. Your progress is saved; click Resume to continue.`);
+    setStatus('Stopped because of an unexpected error.', { busy: false });
   } finally {
     isRunning = false;
-    refreshActionButtons();
-    if (cancelRequested) cancelBtn.disabled = true;
-    checkReady();
+    pauseRequested = false;
+    cancelRequested = false;
+    runAbort = null;
+    pauseAbort = null;
+    finish();
+    renderPreview();
+    refreshUI();
+    if (currentRun && currentRun.status !== 'done' && pageResults.size) showResults(true);
   }
 }
 
 async function processRun() {
   const key = apiKey.value.trim();
-  const pagesToProcess = currentRun.selectedPages || [];
-  updateProgressUI();
+  // Pages that failed for a reason specific to them get another chance on resume.
+  const queue = currentRun.pages.filter(pg => !pageResults.has(pg) || pageResults.get(pg).status === 'failed');
+  let fatal = null;
+  let exhausted = null;
+  let unexpected = null;
+  const stopping = () => cancelRequested || pauseRequested || fatal || exhausted || unexpected;
 
-  for (let idx = 0; idx < pagesToProcess.length; idx++) {
-    const pg = pagesToProcess[idx];
-    const processed = new Map((currentRun.results || []).map(item => [item.pg, item]));
-    if (processed.has(pg)) continue;
-
-    currentRun.currentPage = pg;
-    currentRun.updatedAt = Date.now();
-    await saveCurrentRun();
-
-    setStatus(`Processing page ${getDisplayPageNumber(pg, pagesToProcess)} (${idx + 1} of ${pagesToProcess.length})…`);
-    addOrUpdateLog(pg, 'Rendering…', 'active');
-
-    const page = await pdf.getPage(pg);
-    const vp = page.getViewport({ scale: currentRun.scale });
-    const cv = document.createElement('canvas');
-    cv.width = vp.width;
-    cv.height = vp.height;
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, cv.width, cv.height);
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    const b64 = cv.toDataURL('image/jpeg', .92).split(',')[1];
-
-    // Retry loop — stays on this slide until success, cancel, or permanent error
-    let result = null;
-    let attempt = 0;
-    while (!result) {
-      attempt++;
-      addOrUpdateLog(pg, attempt > 1 ? `Explaining with Claude… (retry ${attempt - 1})` : 'Explaining with Claude…', 'active');
+  const worker = async () => {
+    while (!stopping()) {
+      const pg = queue.shift();
+      if (pg === undefined) return;
       try {
-        activeClaudeController = new AbortController();
-        const expl = await claude(key, currentRun.model, currentRun.prompt, b64, activeClaudeController.signal);
-        result = { pg, b64, expl };
-        addOrUpdateLog(pg, expl.slice(0, 100) + '…', 'done');
-      } catch (e) {
-        activeClaudeController = null;
-        if (isAbortError(e) && cancelRequested) {
-          currentRun.status = 'cancelled';
-          currentRun.updatedAt = Date.now();
-          await saveCurrentRun();
-          setStatus('Cancelled. You can start over or try with different slides.', false);
-          return;
-        }
-        // Non-retryable API errors (auth, billing, permissions) — stop immediately
-        if (e.retryable === false) {
-          currentRun.status = 'error';
-          currentRun.updatedAt = Date.now();
-          await saveCurrentRun();
-          addOrUpdateLog(pg, e.message, 'error');
-          throw e;
-        }
-        // Transient error — wait with capped backoff, then retry same slide
-        const delaySec = Math.min(attempt * 10, 60);
-        addOrUpdateLog(pg, `Error – retrying in ${delaySec}s…`, 'active');
-        setStatus(`Page ${getDisplayPageNumber(pg, pagesToProcess)}: error, retrying in ${delaySec}s…`);
-        await wait(delaySec * 1000);
-        if (cancelRequested) {
-          currentRun.status = 'cancelled';
-          currentRun.updatedAt = Date.now();
-          await saveCurrentRun();
-          setStatus('Cancelled. You can start over or try with different slides.', false);
-          return;
-        }
-        setStatus(`Processing page ${getDisplayPageNumber(pg, pagesToProcess)} (${idx + 1} of ${pagesToProcess.length})…`);
-      } finally {
-        activeClaudeController = null;
+        const result = await explainOnePage(pg, key);
+        if (!result) { queue.unshift(pg); return; }
+        pageResults.set(pg, result);
+        await savePageResult(result);
+        await saveRunMeta();
+        updateProgress();
+      } catch (error) {
+        queue.unshift(pg);
+        if (error instanceof ClaudeError && error.fatal) { fatal = error; runAbort?.abort(); return; }
+        if (error instanceof ClaudeError && error.exhausted) { exhausted = error; pauseAbort?.abort(); return; }
+        unexpected = error;
+        runAbort?.abort();
+        return;
       }
     }
+  };
 
-    currentRun.results.push(result);
-    currentRun.results.sort((a, b) => a.pg - b.pg);
-    currentRun.currentPage = pagesToProcess[idx + 1] || pg;
-    currentRun.updatedAt = Date.now();
-    await saveCurrentRun();
-    updateProgressUI();
+  setStatus(`Explaining ${queue.length} ${queue.length === 1 ? 'page' : 'pages'}…`);
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(CONCURRENCY, queue.length)) }, worker));
+  if (unexpected) throw unexpected;
 
-    if (cancelRequested) {
-      currentRun.status = 'cancelled';
-      currentRun.updatedAt = Date.now();
-      await saveCurrentRun();
-      setStatus('Cancelled. You can start over or try with different slides.', false);
-      return;
-    }
-
-    if (pauseRequested) {
-      currentRun.status = 'paused';
-      currentRun.updatedAt = Date.now();
-      await saveCurrentRun();
-      setStatus(`Paused on page ${getDisplayPageNumber(pagesToProcess[idx + 1] || pg, pagesToProcess)}.`, false);
-      return;
-    }
-
-    if (idx < pagesToProcess.length - 1) await wait(280);
+  if (cancelRequested) {
+    currentRun.status = 'cancelled';
+    await saveRunMeta();
+    setStatus(`Cancelled. ${describeDone()}`, { busy: false });
+    return;
   }
-
-  setStatus('Building Word document…');
-  activeBlob = await buildDocx(currentRun.results, currentRun.fileName);
-  setStatus('Building PDF preview…');
-  activePdfBlob = await buildPdf(currentRun.results, currentRun.fileName);
-  bindDownload(activeBlob, currentRun.fileName);
-  bindPdfDownload(activePdfBlob, currentRun.fileName);
-  renderGeneratedPreview(currentRun.results, currentRun.fileName);
-  currentRun.status = 'done';
-  currentRun.updatedAt = Date.now();
-  await saveCurrentRun();
-  updateProgressUI();
-  setStatus('Done ✦', false);
-  doneWrap.classList.remove('hidden');
-}
-
-function requestPause() {
-  if (!isRunning) return;
-  pauseRequested = true;
-  pauseBtn.textContent = 'Pausing…';
-  pauseBtn.disabled = true;
-}
-
-async function restoreSavedRun() {
-  const saved = await getSavedRun();
-  if (!saved) {
-    refreshActionButtons();
-    checkReady();
+  if (fatal) {
+    currentRun.status = 'error';
+    await saveRunMeta();
+    showError(fatal.message);
+    setStatus(`Stopped. ${describeDone()}`, { busy: false });
+    return;
+  }
+  if (exhausted || pauseRequested) {
+    currentRun.status = 'paused';
+    await saveRunMeta();
+    if (exhausted) showError(`${exhausted.message} The run is paused after several attempts; click Resume to try again.`);
+    setStatus(`Paused. ${describeDone()}`, { busy: false });
     return;
   }
 
-  currentRun = saved;
-  promptTxt.value = saved.prompt || promptTxt.value;
-  modelSel.value = saved.model || modelSel.value;
-  scaleSel.value = String(saved.scale || scaleSel.value);
-  pgFrom.value = saved.from || 1;
-  pgTo.value = saved.to === (saved.selectedPages?.length || saved.numPages) ? '' : saved.to;
+  currentRun.status = 'done';
+  await saveRunMeta();
+  updateProgress();
+  setStatus(`Done. ${describeDone()}`, { busy: false });
+  showResults(true);
+}
 
-  await loadPdfSource(saved.pdfBytes, { name: saved.fileName, size: saved.fileSize }, { resetProgress: false });
-  hydrateLogsFromRun();
-  updateProgressUI();
-  refreshActionButtons();
+async function explainOnePage(pg, key) {
+  logPage(pg, 'Rendering the page', 'active');
+  const image = await renderPageImage(pg, currentRun.scale);
+  const prompt = `${currentRun.prompt}\n\n${languageInstruction(currentRun.language)}`;
 
-  if (saved.status === 'done') {
-    setStatus('Rebuilding Word document…');
-    activeBlob = await buildDocx(saved.results || [], saved.fileName);
-    setStatus('Rebuilding PDF preview…');
-    activePdfBlob = await buildPdf(saved.results || [], saved.fileName);
-    bindDownload(activeBlob, saved.fileName);
-    bindPdfDownload(activePdfBlob, saved.fileName);
-    renderGeneratedPreview(saved.results || [], saved.fileName);
-    setStatus('Done ✦', false);
-    doneWrap.classList.remove('hidden');
-  } else if (saved.status === 'paused') {
-    progCard.classList.remove('hidden');
-    setStatus(`Paused on page ${getDisplayPageNumber(saved.currentPage || saved.from, saved.selectedPages)} of ${(saved.selectedPages || []).length || saved.to}`, false);
-  } else if (saved.status === 'cancelled' || saved.status === 'cancelling') {
-    progCard.classList.remove('hidden');
-    setStatus('Cancelled. You can start over or try with different slides.', false);
-  } else if (saved.status === 'error') {
-    progCard.classList.remove('hidden');
-    const done = (saved.results || []).length;
-    const total = (saved.selectedPages || []).length;
-    currentRun.status = 'paused';
-    saved.status = 'paused';
-    await saveCurrentRun();
-    refreshActionButtons();
-    setStatus(`Error on last run (${done}/${total} slides done). Fix the issue and click Resume.`, false);
-  } else {
-    if (!apiKey.value.trim().startsWith('sk-')) {
-      saved.status = 'paused';
-      currentRun.status = 'paused';
-      await saveCurrentRun();
-      progCard.classList.remove('hidden');
-      setStatus(`Saved progress found. Add your API key to resume page ${getDisplayPageNumber(saved.currentPage || saved.from, saved.selectedPages)}.`, false);
-      refreshActionButtons();
-      return;
+  for (let attempt = 1; ; attempt++) {
+    if (cancelRequested) return null;
+    logPage(pg, attempt === 1 ? 'Explaining' : `Explaining, attempt ${attempt} of ${MAX_ATTEMPTS}`, 'active');
+    try {
+      const answer = await explainPage({ apiKey: key, model: currentRun.model, prompt, image, signal: runAbort.signal });
+      addUsage(answer.usage);
+      if (answer.stopReason === 'refusal') {
+        logPage(pg, 'Claude declined to explain this page', 'warn');
+        return { pg, ...image, expl: '', status: 'declined', note: answer.refusalCategory || '' };
+      }
+      if (!answer.text) {
+        logPage(pg, 'Claude returned an empty answer', 'error');
+        return { pg, ...image, expl: '', status: 'failed', note: 'Claude returned an empty answer.' };
+      }
+      const truncated = answer.stopReason === 'max_tokens';
+      logPage(pg, truncated ? `${summaryLine(answer.text)} (cut short)` : summaryLine(answer.text), truncated ? 'warn' : 'done');
+      return { pg, ...image, expl: answer.text, status: truncated ? 'truncated' : 'ok' };
+    } catch (error) {
+      if (error?.name === 'AbortError') return null;
+      if (!(error instanceof ClaudeError)) throw error;
+      if (error.fatal) { logPage(pg, error.message, 'error'); throw error; }
+      if (!error.retryable) {
+        logPage(pg, error.message, 'error');
+        return { pg, ...image, expl: '', status: 'failed', note: error.message };
+      }
+      if (attempt >= MAX_ATTEMPTS) {
+        error.exhausted = true;
+        logPage(pg, `${error.message} Paused after ${MAX_ATTEMPTS} attempts.`, 'error');
+        throw error;
+      }
+      const delay = retryDelayMs(error, attempt);
+      logPage(pg, `${error.message} Trying again in ${Math.ceil(delay / 1000)} s.`, 'waiting');
+      if (!(await sleep(delay, [runAbort?.signal, pauseAbort?.signal]))) return null;
     }
-    progCard.classList.remove('hidden');
-    setStatus(`Resuming from page ${getDisplayPageNumber(saved.currentPage || saved.from, saved.selectedPages)}…`);
-    await startProcessing({ resume: true });
   }
 }
 
-function hydrateLogsFromRun() {
-  logFeed.innerHTML = '';
-  clearLogs();
-  for (const row of currentRun?.logs || []) addLog(row.id, row.msg, row.type);
+function summaryLine(text) {
+  const first = text.split('\n').map(line => line.replace(/^[#>\-*\d.\s]+/, '').replace(/\*\*|__|`/g, '').trim()).find(Boolean) || 'Explained';
+  return first.length > 110 ? `${first.slice(0, 107)}…` : first;
 }
 
-function updateProgressUI() {
+function addUsage(usage) {
+  currentRun.usage.input += usage.input;
+  currentRun.usage.output += usage.output;
+  updateProgress();
+}
+
+function explainedCount() {
+  return [...pageResults.values()].filter(result => result.status === 'ok' || result.status === 'truncated').length;
+}
+
+function describeDone() {
+  const total = currentRun?.pages?.length || 0;
+  const unexplained = pageResults.size - explainedCount();
+  return `${explainedCount()} of ${total} ${total === 1 ? 'page' : 'pages'} explained`
+    + (unexplained ? `, ${unexplained} without an explanation.` : '.');
+}
+
+function updateProgress() {
   if (!currentRun) return;
-  const total = (currentRun.selectedPages || []).length;
-  const done = (currentRun.results || []).length;
-  const pct = total > 0 ? Math.round(done / total * 100) : 0;
-  barFill.style.width = pct + '%';
-  pctEl.textContent = pct + '%';
+  const total = currentRun.pages.length;
+  const done = currentRun.pages.filter(pg => pageResults.has(pg)).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  barFill.style.width = `${pct}%`;
+  pctEl.textContent = `${pct}%`;
+  progBar.setAttribute('aria-valuenow', String(pct));
+  progBar.setAttribute('aria-valuetext', `${done} of ${total} pages`);
+  const cost = costUsd(currentRun.model, currentRun.usage);
+  const costLabel = currentRun.status === 'done' ? 'Total cost' : 'Cost so far';
+  costEl.textContent = cost > 0 ? `${costLabel}: about ${formatUsd(cost)}` : '';
+  if (isRunning && !pauseRequested && !cancelRequested) setStatus(`Explaining pages: ${done} of ${total} done`);
 }
 
-function refreshActionButtons() {
-  const hasRun = !!currentRun;
-  pauseBtn.disabled = !hasRun || !['running', 'paused'].includes(currentRun?.status);
-  pauseBtn.textContent = currentRun?.status === 'running' ? 'Pause' : 'Resume';
-  cancelBtn.disabled = !hasRun || ['done', 'cancelled'].includes(currentRun?.status);
-  cancelBtn.textContent = 'Cancel';
-  resetBtn.disabled = !hasRun && !pdf;
-  checkReady();
+function requestPause() {
+  if (!isRunning || pauseRequested) return;
+  pauseRequested = true;
+  pauseAbort?.abort();
+  setStatus('Pausing after the pages in progress…');
+  refreshUI();
 }
 
-function bindDownload(blob, srcName) {
-  dlBtn.onclick = () => {
-    const u = URL.createObjectURL(blob), a = document.createElement('a');
-    a.href = u;
-    a.download = srcName.replace(/\.pdf$/i, '') + '_explained.docx';
-    a.click();
-    URL.revokeObjectURL(u);
-  };
+async function cancelRun() {
+  if (isRunning) {
+    cancelRequested = true;
+    runAbort?.abort();
+    setStatus('Cancelling…');
+    refreshUI();
+    return;
+  }
+  if (!currentRun) return;
+  currentRun.status = 'cancelled';
+  await saveRunMeta();
+  setStatus(`Cancelled. ${describeDone()}`, { busy: false });
+  refreshUI();
 }
 
-function bindPdfDownload(blob, srcName) {
-  pdfBtn.onclick = () => {
-    const u = URL.createObjectURL(blob), a = document.createElement('a');
-    a.href = u;
-    a.download = srcName.replace(/\.pdf$/i, '') + '_explained.pdf';
-    a.click();
-    URL.revokeObjectURL(u);
-  };
-}
-
-async function resetCurrentRun() {
-  pauseRequested = false;
-  cancelRequested = false;
-  activeClaudeController?.abort();
-  activeClaudeController = null;
-  isRunning = false;
+// Forget the run (progress and saved data) but keep the loaded PDF.
+async function discardRun() {
+  currentRun = null;
+  pageResults = new Map();
   activeBlob = null;
   activePdfBlob = null;
-  currentRun = null;
+  clearLogs();
+  showResults(false);
+  progCard.classList.add('hidden');
+  barFill.style.width = '0%';
+  pctEl.textContent = '0%';
+  costEl.textContent = '';
+  try { await idbClear(); } catch (error) { console.warn('Could not clear saved progress', error); }
+}
+
+// Editing the selection after a finished or stopped run starts a new one.
+function invalidateFinishedRun() {
+  if (currentRun && !isRunning) void discardRun();
+}
+
+async function startOver() {
+  if (isRunning) {
+    cancelRequested = true;
+    runAbort?.abort();
+    await runFinished;
+  }
+  await discardRun();
   pdf = null;
   pdfBuffer = null;
   pdfFileMeta = null;
-  await deleteSavedRun();
+  selectedPages = [];
   fileInput.value = '';
   fileBadge.classList.add('hidden');
   previewWrap.classList.add('hidden');
+  thumbGrid.replaceChildren();
+  pgFrom.value = '';
+  pgTo.value = '';
+  hideError();
   closePageModal();
-  logFeed.innerHTML = '';
-  clearLogs();
-  doneWrap.classList.add('hidden');
+  refreshUI();
+  dropZone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ── Results ──────────────────────────────────────────────────────
+function orderedResults() {
+  return (currentRun?.pages || []).filter(pg => pageResults.has(pg)).map(pg => pageResults.get(pg));
+}
+
+function showResults(visible) {
   removeGeneratedPreview();
-  errBanner.classList.add('hidden');
-  barFill.style.width = '0%';
-  pctEl.textContent = '0%';
-  setStatus('Ready for a new selection', false);
-  refreshActionButtons();
-  checkReady();
+  doneWrap.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const results = orderedResults();
+  if (!results.length) { doneWrap.classList.add('hidden'); return; }
+  activeBlob = null;
+  activePdfBlob = null;
+  const total = currentRun.pages.length;
+  const explained = explainedCount();
+  const missing = results.length - explained;
+  const marked = missing ? ` ${missing} ${missing === 1 ? 'page has' : 'pages have'} no explanation and ${missing === 1 ? 'is' : 'are'} marked in the document.` : '';
+  doneMsg.textContent = currentRun.status === 'done'
+    ? (missing ? `Your document is ready: ${explained} of ${total} pages explained.${marked}` : `Your document is ready: all ${total} ${total === 1 ? 'page' : 'pages'} explained.`)
+    : `${results.length} of ${total} pages are done so far. You can download them now or resume later.${marked}`;
+  renderGeneratedPreview(results);
 }
 
-async function cancelCurrentRun() {
-  pauseRequested = false;
-  cancelRequested = true;
-  if (currentRun) {
-    currentRun.status = 'cancelled';
-    currentRun.updatedAt = Date.now();
-    await saveCurrentRun();
+async function downloadExport(kind) {
+  const button = kind === 'docx' ? dlBtn : pdfBtn;
+  const results = orderedResults();
+  if (!results.length) return;
+  const base = documentTitle(currentRun.fileName);
+  const label = button.querySelector('span:last-child');
+  const original = label.textContent;
+  button.disabled = true;
+  label.textContent = 'Preparing…';
+  try {
+    if (kind === 'docx') {
+      activeBlob = activeBlob || await buildDocx(results, currentRun.fileName);
+      downloadBlob(activeBlob, `${base} explained.docx`);
+    } else {
+      activePdfBlob = activePdfBlob || await buildPdf(results, currentRun.fileName);
+      downloadBlob(activePdfBlob, `${base} explained.pdf`);
+    }
+  } catch (error) {
+    console.error(error);
+    showError(`The ${kind === 'docx' ? 'Word' : 'PDF'} file could not be created: ${error?.message || error}`);
+  } finally {
+    button.disabled = false;
+    label.textContent = original;
   }
-  activeClaudeController?.abort();
-  doneWrap.classList.add('hidden');
-  setStatus('Cancelled. You can start over or try with different slides.', false);
-  refreshActionButtons();
-  cancelBtn.disabled = true;
 }
 
-async function saveCurrentRun() {
-  if (!currentRun) return;
-  currentRun.logs = (currentRun.logs || []).slice(-200);
-  await idbSet(RUN_KEY, currentRun);
-}
+// ── Restoring saved progress ─────────────────────────────────────
+async function restoreSavedRun() {
+  const saved = await loadSavedRun();
+  if (!saved) { refreshUI(); return; }
+  const { run, bytes, results } = saved;
 
-async function getSavedRun() { return idbGet(RUN_KEY); }
-async function deleteSavedRun() { return idbDel(RUN_KEY); }
+  promptTxt.value = run.prompt || DEFAULT_PROMPT;
+  if (LANGUAGES.some(([value]) => value === run.language)) languageSel.value = run.language;
+  if (MODELS[run.model]) modelSel.value = run.model;
+  scaleSel.value = String(run.scale || 2);
+  pgFrom.value = run.from > 1 ? String(run.from) : '';
+  pgTo.value = run.to && run.to < run.numPages ? String(run.to) : '';
 
-async function openDb() {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return dbPromise;
-}
+  const loaded = await loadPdfSource(bytes, { name: run.fileName, size: run.fileSize }, { selection: run.selection });
+  if (!loaded) return;
+  currentRun = run;
+  pageResults = results;
+  if (currentRun.status === 'running') currentRun.status = 'paused';
+  restoreLogs(run.logs);
+  progCard.classList.remove('hidden');
+  updateProgress();
 
-async function idbSet(key, value) {
-  const db = await openDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function idbGet(key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const req = tx.objectStore(STORE_NAME).get(key);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbDel(key) {
-  const db = await openDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  if (currentRun.status === 'done') {
+    setStatus(`Done. ${describeDone()}`, { busy: false });
+    showResults(true);
+  } else {
+    const verb = currentRun.status === 'cancelled' ? 'Cancelled' : 'Paused';
+    const next = currentRun.status === 'cancelled' ? 'Start over to explain another PDF.' : (hasValidKey() ? 'Click Resume to continue.' : 'Add your API key, then click Resume.');
+    setStatus(`${verb}. ${describeDone()} ${next}`, { busy: false });
+    if (pageResults.size) showResults(true);
+  }
+  refreshUI();
 }

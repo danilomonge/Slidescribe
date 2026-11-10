@@ -9,12 +9,55 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [1.1.0] — 2026-04-13
+## [2.0.0] - 2026-11-10
+
+### Changed
+- Models updated to Claude Haiku 5.5, Sonnet 5.5 (now the default) and Opus 5.5, on API
+  version `2026-10-21` with medium effort. Haiku 5.5 and Sonnet 5.5 cost less than the
+  models they replace.
+- Answers are read from every text block, so responses that start with a thinking block are
+  handled correctly, and `max_tokens` is 16,000 so thinking cannot cut an explanation short.
+- Three pages are explained in parallel.
+- Retries are limited to six attempts per page with exponential backoff that honours
+  `retry-after`; after that the run pauses instead of retrying forever. Only API and network
+  errors are retried, and every request times out after five minutes.
+- Pause and cancel take effect immediately, also while waiting to retry.
+- Pages keep their original numbers everywhere (thumbnails, range, exports).
+- Progress is stored per page in IndexedDB instead of rewriting the whole run after every
+  step; runs saved by version 1 are migrated.
+- The default instructions are in English and neutral; the language is a separate setting.
+- Word export: one Heading 1 per page, real bullet and numbered lists, tables, and images
+  that keep their aspect ratio (they were stretched to 4:3 before).
+- PDF export: embedded DejaVu Serif with bold and italic, so Greek letters, arrows and math
+  symbols render, plus page numbers. Characters the font lacks are replaced, never garbled.
+- Thumbnails follow the page shape and render when they scroll into view.
+- Emoji replaced with line icons; higher text contrast; visible keyboard focus.
 
 ### Added
-- **Resilient processing** — failed pages retry automatically with exponential backoff (capped at 60 s) instead of being skipped. Permanent API errors (invalid key, billing, model not found) stop immediately without retrying.
-- **PDF export** — download the explained document as a `.pdf` in addition to `.docx`.
-- **Session persistence** — run state is saved to IndexedDB; reloading the page mid-run preserves progress and allows resuming from the last completed page.
+- Explanation language setting with eleven languages.
+- Cost estimate before a run and the live cost during it.
+- Refused pages and explanations cut short at the length limit are marked in the document.
+- Server-side fallback for Sonnet and Opus when a request is declined by safety filters.
+- Downloads of the pages finished so far after pausing or cancelling.
+- Settings (instructions, language, model, quality) remembered on the device.
+- Content Security Policy, Subresource Integrity for CDN scripts, and PDF.js with script
+  evaluation disabled (CVE-2024-4367).
+- Reduced motion support and a cheaper background animation.
+- Unit tests, a headless Chrome end-to-end test with a scripted API, and CI.
+
+### Fixed
+- A response without a text block could make a page retry forever, billing every attempt.
+- An error thrown in one parallel task no longer leaves other requests running.
+- Status messages no longer render API text as HTML.
+
+---
+
+## [1.1.0] - 2026-04-13
+
+### Added
+- Resilient processing: failed pages retry automatically with exponential backoff (capped at 60 s) instead of being skipped. Permanent API errors (invalid key, billing, model not found) stop immediately without retrying.
+- PDF export: download the explained document as a `.pdf` in addition to `.docx`.
+- Session persistence: run state is saved to IndexedDB; reloading the page mid-run preserves progress and allows resuming from the last completed page.
 - Paper-plane logo in the top-left navbar, replacing the previous diamond glyph.
 
 ### Changed
@@ -26,7 +69,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [1.0.0] — 2026-04-12
+## [1.0.0] - 2026-04-12
 
 ### Added
 - PDF upload via drag-and-drop or file picker.

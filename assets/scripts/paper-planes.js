@@ -2,6 +2,8 @@
 function initPaperPlanes() {
   const planes = Array.from(document.querySelectorAll('.paper-plane'));
   if (!planes.length) return;
+  // People who ask their system for less motion get a still background.
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
 
   const baseConfigs = [
     { side: 'left',  x: 0.06, y: 0.17, heading: deg(24),  speed: 136, amp1: .82, amp2: .36, freq1: .62, freq2: 1.18, scale: 1.00 },
@@ -36,6 +38,7 @@ function initPaperPlanes() {
       phase1: idx * 1.7 + 0.8,
       phase2: idx * 2.1 + 2.2,
       scale: cfg.scale,
+      size: el.offsetWidth || 24,
       turnDrift: (Math.random() * 2 - 1) * .75,
       driftTimer: 2.4 + Math.random() * 2.2
     };
@@ -116,12 +119,11 @@ function updatePaperPlane(state, dt) {
   positionPlane(state);
 }
 
+// The size is measured once at start, so drawing a frame never forces a layout.
 function positionPlane(state) {
-  const rect = state.el.getBoundingClientRect();
+  const half = state.size / 2;
   const tipOffset = Math.PI / 4;
-  state.el.style.left = '0px';
-  state.el.style.top = '0px';
-  state.el.style.transform = `translate(${state.x - rect.width / 2}px, ${state.y - rect.height / 2}px) rotate(${state.heading + tipOffset}rad) scale(${state.scale})`;
+  state.el.style.transform = `translate(${state.x - half}px, ${state.y - half}px) rotate(${state.heading + tipOffset}rad) scale(${state.scale})`;
 }
 
 function planeCorridor() {

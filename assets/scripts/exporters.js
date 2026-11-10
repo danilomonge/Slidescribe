@@ -1,422 +1,487 @@
-// ── Build docx ───────────────────────────────────────────────────
-async function buildDocx(results, srcName) {
-  const {Document,Packer,Paragraph,TextRun,ImageRun,AlignmentType,HeadingLevel,BorderStyle,PageBreak} = docx;
-  const title = srcName.replace(/\.pdf$/i,'');
-  const pageOrder = currentRun?.selectedPages?.length ? currentRun.selectedPages : results.map(item => item.pg);
-  const ch = [
-    new Paragraph({spacing:{before:0,after:320},children:[new TextRun({text:title+' — Explained',bold:true,size:40,color:'6c8fff',font:'Georgia'})]}),
-    new Paragraph({spacing:{after:640},children:[new TextRun({text:`${results.length} pages · AI-generated explanations`,size:20,color:'888888',font:'Georgia'})]})
+// ── Exports and preview ──────────────────────────────────────────
+// Results: { pg, b64, width, height, expl, status: 'ok' | 'truncated' | 'declined' | 'failed', note }
+
+const ACCENT = '4f6fff';
+const HEADING_COLORS = ['1e3a8a', '1e40af', '334155'];
+
+function documentTitle(fileName) {
+  return String(fileName || 'Document').replace(/\.pdf$/i, '');
+}
+
+function resultNote(result) {
+  if (result.status === 'declined') return 'Claude declined to explain this page.';
+  if (result.status === 'failed') return `This page could not be explained. ${result.note || ''}`.trim();
+  if (result.status === 'truncated') return 'This explanation was cut short because it reached the length limit.';
+  return '';
+}
+
+async function ensureImageSize(result) {
+  if (result.width && result.height) return result;
+  const img = await loadImage(`data:image/jpeg;base64,${result.b64}`);
+  return { ...result, width: img.naturalWidth, height: img.naturalHeight };
+}
+
+function fitBox(width, height, maxWidth, maxHeight) {
+  const scale = Math.min(maxWidth / width, maxHeight / height, 1);
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// ── Word ─────────────────────────────────────────────────────────
+async function buildDocx(rawResults, fileName) {
+  const {
+    Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType,
+    LevelFormat, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType
+  } = docx;
+  const results = await Promise.all(rawResults.map(ensureImageSize));
+  const title = documentTitle(fileName);
+  const font = 'Georgia';
+  const headingLevels = [HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4];
+  let listInstance = 0;
+
+  const runs = (inline, extra = {}) => (inline || []).map(segment => new TextRun({
+    text: segment.text,
+    bold: segment.bold || extra.bold,
+    italics: segment.italic || extra.italics,
+    font: segment.code ? 'Consolas' : font,
+    color: extra.color,
+    size: extra.size
+  }));
+
+  const tableBlock = block => {
+    const columns = Math.max(block.header.length, ...block.rows.map(row => row.length), 1);
+    const border = { style: BorderStyle.SINGLE, color: 'c7cfe0', size: 4 };
+    const cell = (inline, header) => new TableCell({
+      width: { size: Math.floor(100 / columns), type: WidthType.PERCENTAGE },
+      shading: header ? { type: ShadingType.CLEAR, color: 'auto', fill: 'eef2fd' } : undefined,
+      margins: { top: 60, bottom: 60, left: 100, right: 100 },
+      children: [new Paragraph({ children: runs(inline, header ? { bold: true, color: HEADING_COLORS[0] } : {}) })]
+    });
+    const pad = row => Array.from({ length: columns }, (_, idx) => row[idx] || []);
+    return new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border },
+      rows: [
+        new TableRow({ tableHeader: true, children: pad(block.header).map(inline => cell(inline, true)) }),
+        ...block.rows.map(row => new TableRow({ children: pad(row).map(inline => cell(inline, false)) }))
+      ]
+    });
+  };
+
+  const explanationBlocks = text => {
+    const out = [];
+    for (const block of parseMarkdown(text)) {
+      if (block.type === 'heading') {
+        out.push(new Paragraph({ heading: headingLevels[block.level - 1], children: runs(block.inline) }));
+      } else if (block.type === 'paragraph') {
+        out.push(new Paragraph({ spacing: { after: 120 }, children: runs(block.inline) }));
+      } else if (block.type === 'list') {
+        const instance = ++listInstance;
+        for (const item of block.items) {
+          out.push(new Paragraph({
+            numbering: { reference: block.ordered ? 'numbers' : 'bullets', level: item.level, instance },
+            spacing: { after: 60 },
+            children: runs(item.inline)
+          }));
+        }
+      } else if (block.type === 'table') {
+        out.push(tableBlock(block), new Paragraph({ spacing: { after: 120 }, children: [] }));
+      } else if (block.type === 'quote') {
+        out.push(new Paragraph({
+          indent: { left: 360 },
+          border: { left: { style: BorderStyle.SINGLE, color: 'c7cfe0', size: 12, space: 8 } },
+          spacing: { after: 120 },
+          children: runs(block.inline, { italics: true })
+        }));
+      } else if (block.type === 'code') {
+        out.push(new Paragraph({
+          shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'f3f4f6' },
+          spacing: { after: 120 },
+          children: block.text.split('\n').flatMap((line, idx) => [
+            ...(idx ? [new TextRun({ break: 1 })] : []),
+            new TextRun({ text: line, font: 'Consolas', size: 20 })
+          ])
+        }));
+      }
+    }
+    return out;
+  };
+
+  const children = [
+    new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun({ text: title })] }),
+    new Paragraph({
+      spacing: { after: 480 },
+      children: [new TextRun({ text: `${results.length} ${results.length === 1 ? 'page' : 'pages'} explained by Claude`, color: '6b7280' })]
+    })
   ];
-  for (let i=0;i<results.length;i++) {
-    const {pg,b64,expl}=results[i];
-    ch.push(new Paragraph({spacing:{before:i?160:0,after:140},border:{bottom:{style:BorderStyle.THICK,size:8,color:'6c8fff',space:5}},children:[new TextRun({text:`Page ${getDisplayPageNumber(pg, pageOrder)}`,bold:true,size:26,color:'6c8fff',font:'Georgia'})]}));
-    try {
-      const bin=atob(b64),arr=new Uint8Array(bin.length);
-      for(let j=0;j<bin.length;j++) arr[j]=bin.charCodeAt(j);
-      ch.push(new Paragraph({alignment:AlignmentType.CENTER,spacing:{before:100,after:235},children:[new ImageRun({data:arr,transformation:{width:640,height:460},type:'jpg'})]}));
-    } catch(_) {}
-    ch.push(
-      new Paragraph({spacing:{before:110,after:230},border:{bottom:{style:BorderStyle.SINGLE,size:2,color:'dddddd',space:2}},children:[new TextRun({text:'Explanation',size:16,color:'888888',font:'Georgia',italics:true})]}),
-      ...parseText(expl)
-    );
-    if (i<results.length-1) ch.push(new Paragraph({spacing:{before:280},children:[new PageBreak()]}));
-  }
+
+  results.forEach((result, index) => {
+    children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, pageBreakBefore: index > 0, children: [new TextRun({ text: `Page ${result.pg}` })] }));
+    const box = fitBox(result.width, result.height, 620, 440);
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 120, after: 240 },
+      children: [new ImageRun({ data: base64ToBytes(result.b64), transformation: box, type: 'jpg' })]
+    }));
+    const note = resultNote(result);
+    if (note) children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: note, italics: true, color: '6b7280' })] }));
+    if (result.expl) children.push(...explanationBlocks(result.expl));
+  });
+
+  const bulletLevels = ['•', '◦', '▪'].map((symbol, level) => ({
+    level, format: LevelFormat.BULLET, text: symbol, alignment: AlignmentType.LEFT,
+    style: { paragraph: { indent: { left: 360 + level * 360, hanging: 260 } } }
+  }));
+  const numberLevels = ['%1.', '%2.', '%3.'].map((text, level) => ({
+    level, format: [LevelFormat.DECIMAL, LevelFormat.LOWER_LETTER, LevelFormat.LOWER_ROMAN][level], text,
+    alignment: AlignmentType.LEFT,
+    style: { paragraph: { indent: { left: 360 + level * 360, hanging: 300 } } }
+  }));
+
   const doc = new Document({
-    styles:{
-      default:{document:{run:{font:'Georgia',size:22}}},
-      paragraphStyles:[
-        {id:'Heading1',name:'Heading 1',basedOn:'Normal',next:'Normal',quickFormat:true,run:{size:30,bold:true,font:'Georgia',color:'1e3a8a'},paragraph:{spacing:{before:110,after:28},outlineLevel:0}},
-        {id:'Heading2',name:'Heading 2',basedOn:'Normal',next:'Normal',quickFormat:true,run:{size:24,bold:true,font:'Georgia',color:'1e40af'},paragraph:{spacing:{before:40,after:0},outlineLevel:1}},
-        {id:'Heading3',name:'Heading 3',basedOn:'Normal',next:'Normal',quickFormat:true,run:{size:22,bold:true,font:'Georgia'},paragraph:{spacing:{before:40,after:0},outlineLevel:2}}
+    creator: 'SlideScribe',
+    title: `${title}, explained`,
+    description: 'Page by page explanations generated by Claude',
+    numbering: { config: [{ reference: 'bullets', levels: bulletLevels }, { reference: 'numbers', levels: numberLevels }] },
+    styles: {
+      default: { document: { run: { font, size: 22 }, paragraph: { spacing: { line: 300 } } } },
+      paragraphStyles: [
+        { id: 'Title', name: 'Title', basedOn: 'Normal', next: 'Normal', run: { font, size: 48, bold: true, color: ACCENT }, paragraph: { spacing: { after: 120 } } },
+        { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font, size: 30, bold: true, color: ACCENT }, paragraph: { spacing: { before: 0, after: 120 }, outlineLevel: 0 } },
+        { id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font, size: 28, bold: true, color: HEADING_COLORS[0] }, paragraph: { spacing: { before: 240, after: 80 }, outlineLevel: 1 } },
+        { id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font, size: 24, bold: true, color: HEADING_COLORS[1] }, paragraph: { spacing: { before: 200, after: 60 }, outlineLevel: 2 } },
+        { id: 'Heading4', name: 'Heading 4', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font, size: 22, bold: true, color: HEADING_COLORS[2] }, paragraph: { spacing: { before: 160, after: 40 }, outlineLevel: 3 } }
       ]
     },
-    sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1134,right:1134,bottom:1134,left:1134}}},children:ch}]
+    sections: [{
+      properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, right: 1134, bottom: 1134, left: 1134 } } },
+      children
+    }]
   });
-  return await Packer.toBlob(doc);
+  return Packer.toBlob(doc);
 }
 
-async function buildPdf(results, srcName) {
-  const { jsPDF } = window.jspdf;
-  const pdfDoc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-  const pageWidth = pdfDoc.internal.pageSize.getWidth();
-  const pageHeight = pdfDoc.internal.pageSize.getHeight();
-  const margin = 54;
-  const contentWidth = pageWidth - margin * 2;
-  const title = srcName.replace(/\.pdf$/i, '') + ' — Explained';
-  const bottomLimit = pageHeight - margin;
-  const pageOrder = currentRun?.selectedPages?.length ? currentRun.selectedPages : results.map(item => item.pg);
+// ── PDF ──────────────────────────────────────────────────────────
+const PDF_FONT = 'DejaVuSerif';
+const PDF_FONT_FILES = {
+  normal: 'assets/fonts/DejaVuSerif.ttf',
+  bold: 'assets/fonts/DejaVuSerif-Bold.ttf',
+  italic: 'assets/fonts/DejaVuSerif-Italic.ttf',
+  bolditalic: 'assets/fonts/DejaVuSerif-BoldItalic.ttf'
+};
+let pdfFontCache = null;
 
-  const addNewPdfPage = () => {
-    pdfDoc.addPage();
-    return margin;
-  };
-
-  const ensureSpace = (y, needed) => {
-    if (y + needed <= bottomLimit) return y;
-    return addNewPdfPage();
-  };
-
-  const drawWrappedText = (text, x, y, options = {}) => {
-    const {
-      size = 12,
-      style = 'normal',
-      color = [30, 41, 59],
-      lineHeight = 16,
-      width = contentWidth
-    } = options;
-
-    pdfDoc.setFont('times', style);
-    pdfDoc.setFontSize(size);
-    pdfDoc.setTextColor(...color);
-    const wrapped = pdfDoc.splitTextToSize(text || ' ', width);
-    y = ensureSpace(y, wrapped.length * lineHeight);
-    pdfDoc.text(wrapped, x, y);
-    return y + wrapped.length * lineHeight;
-  };
-
-  const drawPdfTable = (tableLines, startY) => {
-    const rows = tableLines.map(splitMarkdownRow);
-    const header = rows[0];
-    const body = rows.slice(2);
-    const colCount = Math.max(header.length, 1);
-    const colWidth = contentWidth / colCount;
-    const padX = 8;
-    const padY = 7;
-    let yPos = startY;
-
-    const drawRow = (cells, options = {}) => {
-      const { headerRow = false } = options;
-      const cellData = Array.from({ length: colCount }, (_, idx) => cells[idx] || '');
-      const lineHeight = headerRow ? 15 : 14;
-      const fontSize = headerRow ? 11.5 : 11;
-      const cellLines = cellData.map(cell => pdfDoc.splitTextToSize(cell || ' ', colWidth - padX * 2));
-      const rowHeight = Math.max(...cellLines.map(lines => lines.length * lineHeight), lineHeight) + padY * 2;
-      yPos = ensureSpace(yPos, rowHeight + 2);
-
-      if (headerRow) {
-        pdfDoc.setFillColor(232, 238, 252);
-        pdfDoc.rect(margin, yPos, contentWidth, rowHeight, 'F');
-      }
-
-      for (let c = 0; c < colCount; c++) {
-        const x = margin + c * colWidth;
-        pdfDoc.setDrawColor(180, 191, 214);
-        pdfDoc.setLineWidth(0.8);
-        pdfDoc.rect(x, yPos, colWidth, rowHeight);
-        pdfDoc.setFont('times', headerRow ? 'bold' : 'normal');
-        pdfDoc.setFontSize(fontSize);
-        pdfDoc.setTextColor(...(headerRow ? [30, 58, 138] : [45, 55, 72]));
-        pdfDoc.text(cellLines[c], x + padX, yPos + padY + lineHeight - 2);
-      }
-
-      yPos += rowHeight;
-    };
-
-    drawRow(header, { headerRow: true });
-    for (const row of body) drawRow(row);
-    return yPos + 10;
-  };
-
-  let y = margin + 4;
-  y = drawWrappedText(title, margin, y, { size: 24, style: 'bold', color: [108, 143, 255], lineHeight: 28 });
-  y = drawWrappedText(`${results.length} pages · AI-generated explanations`, margin, y + 6, { size: 11, color: [136, 136, 136], lineHeight: 14 });
-
-  for (let i = 0; i < results.length; i++) {
-    const { pg, b64, expl } = results[i];
-    y = ensureSpace(y + 26, 24);
-    if (i > 0) y += 10;
-
-    pdfDoc.setDrawColor(108, 143, 255);
-    pdfDoc.setLineWidth(2);
-    pdfDoc.line(margin, y, margin + contentWidth, y);
-    y += 24;
-
-    y = drawWrappedText(`Page ${getDisplayPageNumber(pg, pageOrder)}`, margin, y, { size: 18, style: 'bold', color: [108, 143, 255], lineHeight: 22 });
-    y += 10;
-
-    try {
-      const src = `data:image/jpeg;base64,${b64}`;
-      const props = pdfDoc.getImageProperties(src);
-      const imgMaxWidth = contentWidth;
-      const imgMaxHeight = 370;
-      const scale = Math.min(imgMaxWidth / props.width, imgMaxHeight / props.height);
-      const imgWidth = props.width * scale;
-      const imgHeight = props.height * scale;
-      y = ensureSpace(y, imgHeight + 20);
-      const imgX = margin + (contentWidth - imgWidth) / 2;
-      pdfDoc.addImage(src, 'JPEG', imgX, y, imgWidth, imgHeight, undefined, 'FAST');
-      y += imgHeight + 62;
-    } catch (_) {}
-
-    y = drawWrappedText('Explanation', margin, y, { size: 12, style: 'italic', color: [136, 136, 136], lineHeight: 16 });
-    pdfDoc.setDrawColor(221, 221, 221);
-    pdfDoc.setLineWidth(1);
-    pdfDoc.line(margin, y + 4, margin + contentWidth, y + 4);
-    y += 78;
-
-    const lines = normalizeExplanationLines(expl);
-    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-      const trimmed = lines[lineIndex].trim();
-      if (!trimmed) {
-        y += 1;
-        continue;
-      }
-
-      if (isMarkdownTableStart(lines, lineIndex)) {
-        const tableLines = [lines[lineIndex], lines[lineIndex + 1]];
-        let j = lineIndex + 2;
-        while (j < lines.length && isMarkdownTableRow(lines[j])) {
-          tableLines.push(lines[j]);
-          j += 1;
-        }
-        y = drawPdfTable(tableLines, y);
-        lineIndex = j - 1;
-        continue;
-      }
-
-      if (/^# /.test(trimmed)) {
-        y = drawWrappedText(trimmed.replace(/^# /, ''), margin, y, { size: 20, style: 'bold', color: [30, 58, 138], lineHeight: 24 });
-        y += 6;
-        continue;
-      }
-      if (/^## /.test(trimmed)) {
-        y = drawWrappedText(trimmed.replace(/^## /, ''), margin, y, { size: 16, style: 'bold', color: [30, 64, 175], lineHeight: 20 });
-        y += 0;
-        continue;
-      }
-      if (/^### /.test(trimmed)) {
-        y = drawWrappedText(trimmed.replace(/^### /, ''), margin, y, { size: 14, style: 'bold', color: [51, 65, 85], lineHeight: 18 });
-        y += 0;
-        continue;
-      }
-
-      const plain = stripBoldMarkers(trimmed);
-      y = drawWrappedText(plain, margin, y, { size: 12, style: 'normal', color: [45, 55, 72], lineHeight: 15 });
-      y += /^[•*-]\s/.test(trimmed) ? 1 : 2;
-    }
-
-    if (i < results.length - 1) {
-      pdfDoc.addPage();
-      y = margin;
-    }
+async function loadPdfFonts() {
+  if (pdfFontCache) return pdfFontCache;
+  if (location.protocol === 'file:') {
+    throw new Error('PDF export needs the page to be served over http. Run "python3 -m http.server" in the project folder and open http://localhost:8000.');
   }
-
-  return pdfDoc.output('blob');
+  const entries = await Promise.all(Object.entries(PDF_FONT_FILES).map(async ([style, url]) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not load the PDF font (${url}).`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return [style, btoa(binary)];
+  }));
+  pdfFontCache = Object.fromEntries(entries);
+  return pdfFontCache;
 }
 
-function parseText(text) {
-  const {Paragraph,TextRun,HeadingLevel}=docx;
-  const lines = normalizeExplanationLines(text);
-  const out = [];
+const PDF_REPLACEMENTS = { '✓': '+', '✔': '+', '☑': '+', '✗': '×', '✘': '×', '☐': '[ ]', ' ': ' ', '\t': '    ' };
 
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (!t) {
-      out.push(new Paragraph({spacing:{after:18},children:[new TextRun('')]}));
-      continue;
-    }
-
-    if (isMarkdownTableStart(lines, i)) {
-      const tableLines = [lines[i], lines[i + 1]];
-      let j = i + 2;
-      while (j < lines.length && isMarkdownTableRow(lines[j])) {
-        tableLines.push(lines[j]);
-        j += 1;
-      }
-      out.push(buildDocxTable(tableLines));
-      i = j - 1;
-      continue;
-    }
-
-    const h1=t.match(/^# (.+)/),h2=t.match(/^## (.+)/),h3=t.match(/^### (.+)/);
-    if (h1) {
-      out.push(new Paragraph({heading:HeadingLevel.HEADING_1,children:[new TextRun({text:stripBoldMarkers(h1[1]),bold:true,size:30,color:'1e3a8a',font:'Georgia'})]}));
-      continue;
-    }
-    if (h2) {
-      out.push(new Paragraph({heading:HeadingLevel.HEADING_2,children:[new TextRun({text:stripBoldMarkers(h2[1]),bold:true,size:24,color:'1e40af',font:'Georgia'})]}));
-      continue;
-    }
-    if (h3) {
-      out.push(new Paragraph({heading:HeadingLevel.HEADING_3,children:[new TextRun({text:stripBoldMarkers(h3[1]),bold:true,size:22,font:'Georgia'})]}));
-      continue;
-    }
-    out.push(new Paragraph({spacing:{after:/^[•*-]\s/.test(t)?54:34},children:runs(t)}));
+function pdfSafeText(text) {
+  let out = '';
+  for (const ch of String(text || '')) {
+    if (PDF_REPLACEMENTS[ch] !== undefined) { out += PDF_REPLACEMENTS[ch]; continue; }
+    const cp = ch.codePointAt(0);
+    if (cp === 0xfe0f || cp === 0x200d || /\p{Extended_Pictographic}/u.test(ch)) continue;
+    out += fontCovers(cp) ? ch : '?';
   }
-
   return out;
 }
-function runs(t) {
-  const {TextRun}=docx;
-  return inlineMarkdownSegments(t).map(seg => new TextRun({
-    text: seg.text,
-    bold: !!seg.bold,
-    font: 'Georgia',
-    size: 22
-  }));
-}
 
-function isMarkdownTableStart(lines, index) {
-  return isMarkdownTableRow(lines[index]) && isMarkdownTableDivider(lines[index + 1] || '');
-}
-
-function isMarkdownTableRow(line) {
-  const trimmed = (line || '').trim();
-  return trimmed.includes('|') && /^(\|?.+\|.+\|?.*)$/.test(trimmed);
-}
-
-function isMarkdownTableDivider(line) {
-  const cells = splitMarkdownRow(line);
-  return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell.trim()));
-}
-
-function splitMarkdownRow(line) {
-  return (line || '')
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map(cell => stripBoldMarkers(cell.trim()));
-}
-
-function buildDocxTable(lines) {
-  const {Table,TableRow,TableCell,Paragraph,TextRun,WidthType,BorderStyle,ShadingType,VerticalAlign} = docx;
-  const rows = lines.map(splitMarkdownRow);
-  const header = rows[0];
-  const body = rows.slice(2);
-  const colCount = header.length;
-  const widthPct = Math.floor(100 / Math.max(colCount, 1));
-
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: {
-      top: { style: BorderStyle.SINGLE, color: '3b4252', size: 1 },
-      bottom: { style: BorderStyle.SINGLE, color: '3b4252', size: 1 },
-      left: { style: BorderStyle.SINGLE, color: '3b4252', size: 1 },
-      right: { style: BorderStyle.SINGLE, color: '3b4252', size: 1 },
-      insideHorizontal: { style: BorderStyle.SINGLE, color: '3b4252', size: 1 },
-      insideVertical: { style: BorderStyle.SINGLE, color: '3b4252', size: 1 }
-    },
-    rows: [
-      new TableRow({
-        tableHeader: true,
-        children: header.map(cell => new TableCell({
-          width: { size: widthPct, type: WidthType.PERCENTAGE },
-          shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'e8eefc' },
-          verticalAlign: VerticalAlign.CENTER,
-          children: [
-            new Paragraph({
-              spacing: { before: 60, after: 60 },
-              children: [new TextRun({ text: cell, bold: true, font: 'Georgia', size: 22, color: '1e3a8a' })]
-            })
-          ]
-        }))
-      }),
-      ...body.map(row => new TableRow({
-        children: Array.from({ length: colCount }, (_, idx) => new TableCell({
-          width: { size: widthPct, type: WidthType.PERCENTAGE },
-          verticalAlign: VerticalAlign.CENTER,
-          children: [
-            new Paragraph({
-              spacing: { before: 50, after: 50 },
-              children: runs(row[idx] || '')
-            })
-          ]
-        }))
-      }))
-    ]
-  });
-}
-
-function renderGeneratedPreview(results, srcName) {
-  removeGeneratedPreview();
-  const card = document.createElement('div');
-  card.className = 'preview-doc';
-  card.id = 'generatedPreview';
-  const title = srcName.replace(/\.pdf$/i, '');
-  const pageOrder = currentRun?.selectedPages?.length ? currentRun.selectedPages : results.map(item => item.pg);
-  card.innerHTML = `
-    <div class="preview-doc-head">
-      <h3>Generated Preview</h3>
-      <div class="preview-doc-meta">${results.length} page${results.length===1?'':'s'} ready</div>
-    </div>
-    <div class="doc-preview-pages"></div>
-  `;
-  const pagesWrap = card.querySelector('.doc-preview-pages');
-  for (const item of results) {
-    const displayPage = getDisplayPageNumber(item.pg, pageOrder);
-    const page = document.createElement('div');
-    page.className = 'doc-preview-page';
-    page.innerHTML = `
-      <h4>${esc(title)} · Page ${displayPage}</h4>
-      <img class="doc-preview-shot" src="data:image/jpeg;base64,${item.b64}" alt="Page ${displayPage}">
-      <div class="doc-preview-text">${formatPreviewText(item.expl)}</div>
-    `;
-    const img = page.querySelector('.doc-preview-shot');
-    img.addEventListener('click', () => openImageModal(img.src, `Generated Preview · Page ${displayPage}`));
-    pagesWrap.appendChild(page);
+function fontCovers(cp) {
+  const ranges = PDF_FONT_COVERAGE;
+  let lo = 0, hi = ranges.length / 2 - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cp < ranges[mid * 2]) hi = mid - 1;
+    else if (cp > ranges[mid * 2 + 1]) lo = mid + 1;
+    else return true;
   }
-  doneWrap.appendChild(card);
+  return false;
+}
+
+async function buildPdf(rawResults, fileName) {
+  const { jsPDF } = window.jspdf;
+  const results = await Promise.all(rawResults.map(ensureImageSize));
+  const fonts = await loadPdfFonts();
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4', compress: true });
+  for (const [style, data] of Object.entries(fonts)) {
+    const file = `${PDF_FONT}-${style}.ttf`;
+    pdf.addFileToVFS(file, data);
+    pdf.addFont(file, PDF_FONT, style);
+  }
+  const title = documentTitle(fileName);
+  pdf.setProperties({ title: `${title}, explained`, creator: 'SlideScribe', subject: 'Page by page explanations generated by Claude' });
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 56;
+  const contentWidth = pageWidth - margin * 2;
+  const bottom = pageHeight - margin - 14;
+  const ink = [31, 41, 55];
+  const muted = [107, 114, 128];
+  const accent = [79, 111, 255];
+  const headingColors = [[30, 58, 138], [30, 64, 175], [51, 65, 85]];
+  let y = margin;
+
+  const styleName = segment => (segment.bold ? (segment.italic ? 'bolditalic' : 'bold') : (segment.italic ? 'italic' : 'normal'));
+  const setFont = (style, size) => { pdf.setFont(PDF_FONT, style); pdf.setFontSize(size); };
+  const ensure = needed => { if (y + needed > bottom) { pdf.addPage(); y = margin; } };
+
+  // Wraps styled segments into lines of tokens, measuring each word in its own style.
+  const layout = (segments, width, size, force = {}) => {
+    const lines = [];
+    let line = [];
+    let lineWidth = 0;
+    const newLine = () => {
+      while (line.length && /^\s+$/.test(line[line.length - 1].text)) lineWidth -= line.pop().width;
+      lines.push(line); line = []; lineWidth = 0;
+    };
+    for (const segment of segments) {
+      const style = styleName({ bold: segment.bold || force.bold, italic: segment.italic || force.italic });
+      const color = segment.code ? [55, 65, 81] : null;
+      for (const part of pdfSafeText(segment.text).split(/(\s+)/)) {
+        if (!part) continue;
+        setFont(style, size);
+        if (/^\s+$/.test(part)) {
+          if (!line.length) continue;
+          const w = pdf.getTextWidth(' ');
+          line.push({ text: ' ', style, width: w, color }); lineWidth += w;
+          continue;
+        }
+        let word = part;
+        let w = pdf.getTextWidth(word);
+        if (lineWidth + w > width && line.length) newLine();
+        while (w > width) {
+          let cut = word.length - 1;
+          while (cut > 1 && pdf.getTextWidth(word.slice(0, cut)) > width) cut -= 1;
+          line.push({ text: word.slice(0, cut), style, width: pdf.getTextWidth(word.slice(0, cut)), color });
+          newLine();
+          word = word.slice(cut);
+          w = pdf.getTextWidth(word);
+        }
+        line.push({ text: word, style, width: w, color }); lineWidth += w;
+      }
+    }
+    if (line.length) newLine();
+    return lines;
+  };
+
+  const drawLines = (lines, x, size, lineHeight, color) => {
+    for (const tokens of lines) {
+      ensure(lineHeight);
+      let cx = x;
+      for (const token of tokens) {
+        setFont(token.style, size);
+        pdf.setTextColor(...(token.color || color));
+        pdf.text(token.text, cx, y + size);
+        cx += token.width;
+      }
+      y += lineHeight;
+    }
+  };
+
+  const paragraph = (segments, { x = margin, width = contentWidth, size = 11, lineHeight = 16, color = ink, after = 8, force } = {}) => {
+    drawLines(layout(segments, width, size, force), x, size, lineHeight, color);
+    y += after;
+  };
+
+  const table = block => {
+    const columns = Math.max(block.header.length, ...block.rows.map(row => row.length), 1);
+    const colWidth = contentWidth / columns;
+    const pad = 6;
+    const drawRow = (cells, header) => {
+      const size = 10;
+      setFont(header ? 'bold' : 'normal', size);
+      const wrapped = Array.from({ length: columns }, (_, idx) => pdf.splitTextToSize(pdfSafeText(inlineToPlainText(cells[idx] || [])) || ' ', colWidth - pad * 2));
+      const height = Math.max(...wrapped.map(lines => lines.length)) * 13 + pad * 2;
+      ensure(height);
+      if (header) { pdf.setFillColor(238, 242, 253); pdf.rect(margin, y, contentWidth, height, 'F'); }
+      pdf.setDrawColor(199, 207, 224);
+      pdf.setLineWidth(0.6);
+      wrapped.forEach((lines, idx) => {
+        const x = margin + idx * colWidth;
+        pdf.rect(x, y, colWidth, height);
+        pdf.setTextColor(...(header ? headingColors[0] : ink));
+        pdf.text(lines, x + pad, y + pad + 10, { lineHeightFactor: 1.3 });
+      });
+      y += height;
+    };
+    drawRow(block.header, true);
+    block.rows.forEach(row => drawRow(row, false));
+    y += 10;
+  };
+
+  const explanation = text => {
+    for (const block of parseMarkdown(text)) {
+      if (block.type === 'heading') {
+        const size = [15, 13, 12][block.level - 1];
+        ensure(size * 3);
+        y += block.level === 1 ? 6 : 4;
+        paragraph(block.inline, { size, lineHeight: size * 1.35, color: headingColors[block.level - 1], after: 4, force: { bold: true } });
+      } else if (block.type === 'paragraph') {
+        paragraph(block.inline);
+      } else if (block.type === 'list') {
+        block.items.forEach((item, idx) => {
+          const indent = 14 + item.level * 16;
+          const marker = block.ordered ? `${block.start + idx}.` : ['•', '◦', '▪'][item.level];
+          const lines = layout(item.inline, contentWidth - indent - 14, 11);
+          ensure(16);
+          setFont('normal', 11);
+          pdf.setTextColor(...muted);
+          pdf.text(marker, margin + indent - 2, y + 11, { align: 'right' });
+          drawLines(lines, margin + indent + 4, 11, 16, ink);
+          y += 3;
+        });
+        y += 6;
+      } else if (block.type === 'table') {
+        table(block);
+      } else if (block.type === 'quote') {
+        const start = y;
+        paragraph(block.inline, { x: margin + 14, width: contentWidth - 14, color: [55, 65, 81], force: { italic: true }, after: 0 });
+        pdf.setDrawColor(199, 207, 224);
+        pdf.setLineWidth(2);
+        pdf.line(margin + 3, start + 2, margin + 3, y - 2);
+        y += 8;
+      } else if (block.type === 'code') {
+        const lines = block.text.split('\n').flatMap(line => layout([{ text: line, bold: false, italic: false, code: true }], contentWidth - 16, 9.5));
+        const height = Math.max(lines.length, 1) * 13 + 12;
+        ensure(Math.min(height, bottom - margin));
+        pdf.setFillColor(243, 244, 246);
+        pdf.rect(margin, y, contentWidth, Math.min(height, bottom - y), 'F');
+        y += 6;
+        drawLines(lines, margin + 8, 9.5, 13, [55, 65, 81]);
+        y += 12;
+      }
+    }
+  };
+
+  // Cover
+  setFont('bold', 24);
+  pdf.setTextColor(...accent);
+  drawLines(layout([{ text: title, bold: true, italic: false, code: false }], contentWidth, 24), margin, 24, 30, accent);
+  y += 4;
+  paragraph([{ text: `${results.length} ${results.length === 1 ? 'page' : 'pages'} explained by Claude`, bold: false, italic: false, code: false }], { color: muted, after: 18 });
+
+  results.forEach((result, index) => {
+    if (index > 0) { pdf.addPage(); y = margin; }
+    pdf.setDrawColor(...accent);
+    pdf.setLineWidth(1.5);
+    pdf.line(margin, y, margin + contentWidth, y);
+    y += 10;
+    paragraph([{ text: `Page ${result.pg}`, bold: true, italic: false, code: false }], { size: 17, lineHeight: 22, color: accent, after: 10 });
+
+    const box = fitBox(result.width, result.height, contentWidth, pageHeight * 0.42);
+    ensure(box.height + 16);
+    pdf.addImage(`data:image/jpeg;base64,${result.b64}`, 'JPEG', margin + (contentWidth - box.width) / 2, y, box.width, box.height, undefined, 'FAST');
+    pdf.setDrawColor(229, 231, 235);
+    pdf.setLineWidth(0.5);
+    pdf.rect(margin + (contentWidth - box.width) / 2, y, box.width, box.height);
+    y += box.height + 18;
+
+    const note = resultNote(result);
+    if (note) paragraph([{ text: note, bold: false, italic: true, code: false }], { color: muted, after: 10 });
+    if (result.expl) explanation(result.expl);
+  });
+
+  const total = pdf.getNumberOfPages();
+  for (let page = 1; page <= total; page++) {
+    pdf.setPage(page);
+    setFont('normal', 8.5);
+    pdf.setTextColor(...muted);
+    pdf.text(`${page} / ${total}`, pageWidth / 2, pageHeight - margin / 2, { align: 'center' });
+  }
+  return pdf.output('blob');
+}
+
+// ── On-screen preview ────────────────────────────────────────────
+function renderGeneratedPreview(results) {
+  removeGeneratedPreview();
+  const card = el('section', { className: 'preview-doc', id: 'generatedPreview', 'aria-label': 'Preview of the explained document' });
+  const head = el('div', { className: 'preview-doc-head' });
+  head.append(el('h3', { text: 'Preview' }), el('div', { className: 'preview-doc-meta', text: `${results.length} ${results.length === 1 ? 'page' : 'pages'}` }));
+  const pages = el('div', { className: 'doc-preview-pages' });
+  for (const result of results) {
+    const page = el('article', { className: 'doc-preview-page' });
+    page.append(el('h4', { text: `Page ${result.pg}` }));
+    const img = el('img', { className: 'doc-preview-shot', src: `data:image/jpeg;base64,${result.b64}`, alt: `Page ${result.pg}`, tabIndex: 0 });
+    img.addEventListener('click', () => openImageModal(img.src, `Page ${result.pg}`));
+    img.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openImageModal(img.src, `Page ${result.pg}`); } });
+    page.append(img);
+    const note = resultNote(result);
+    if (note) page.append(el('p', { className: 'doc-preview-note', text: note }));
+    if (result.expl) page.append(renderMarkdown(result.expl));
+    pages.append(page);
+  }
+  card.append(head, pages);
+  doneWrap.append(card);
 }
 
 function removeGeneratedPreview() {
-  const existing = $('generatedPreview');
-  if (existing) existing.remove();
+  $('generatedPreview')?.remove();
 }
 
-function formatPreviewText(text) {
-  return normalizeExplanationLines(text)
-    .map(line => {
-      const raw = line.trim();
-      const t = esc(raw);
-      if (!t) return '<div class="doc-preview-gap"></div>';
-      if (/^# /.test(raw)) return `<h1>${esc(stripBoldMarkers(raw.replace(/^# /, '')))}</h1>`;
-      if (/^## /.test(raw)) return `<h2>${esc(stripBoldMarkers(raw.replace(/^## /, '')))}</h2>`;
-      if (/^### /.test(raw)) return `<h3>${esc(stripBoldMarkers(raw.replace(/^### /, '')))}</h3>`;
-      return `<p>${inlineMarkdownToHtml(raw)}</p>`;
-    })
-    .join('');
+function renderMarkdown(text) {
+  const root = el('div', { className: 'doc-preview-text' });
+  for (const block of parseMarkdown(text)) {
+    if (block.type === 'heading') {
+      root.append(appendInline(el(block.level === 1 ? 'h5' : 'h6', { className: `md-h${block.level}` }), block.inline));
+    } else if (block.type === 'paragraph') {
+      root.append(appendInline(el('p'), block.inline));
+    } else if (block.type === 'list') {
+      const list = el(block.ordered ? 'ol' : 'ul');
+      if (block.ordered && block.start !== 1) list.start = block.start;
+      for (const item of block.items) list.append(appendInline(el('li', { className: item.level ? `md-level-${item.level}` : '' }), item.inline));
+      root.append(list);
+    } else if (block.type === 'table') {
+      const table = el('table');
+      const headRow = el('tr');
+      block.header.forEach(inline => headRow.append(appendInline(el('th'), inline)));
+      table.append(el('thead'));
+      table.tHead.append(headRow);
+      const body = el('tbody');
+      block.rows.forEach(row => {
+        const tr = el('tr');
+        row.forEach(inline => tr.append(appendInline(el('td'), inline)));
+        body.append(tr);
+      });
+      table.append(body);
+      root.append(el('div', { className: 'md-table' }, [table]));
+    } else if (block.type === 'quote') {
+      root.append(appendInline(el('blockquote'), block.inline));
+    } else if (block.type === 'code') {
+      root.append(el('pre', {}, [el('code', { text: block.text })]));
+    }
+  }
+  return root;
 }
 
-function normalizeExplanationLines(text) {
-  return text
-    .split('\n')
-    .map(line => normalizeExplanationLine(line))
-    .filter(line => line !== null);
-}
-
-function normalizeExplanationLine(line) {
-  let trimmed = line.trim();
-  if (!trimmed) return '';
-  if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return null;
-
-  trimmed = trimmed
-    .replace(/^(#{1,3})\s+\*\*\s*(.+?)\s*\*\*$/, '$1 $2')
-    .replace(/^(#{1,3})\s+\*\*(.+)$/, '$1 $2')
-    .replace(/^(#{1,3})\s+(.+?)\*\*$/, '$1 $2')
-    .replace(/^\*\*\s*(.+?)\s*\*\*$/, '$1')
-    .replace(/^\*\*(.+)$/, '$1')
-    .replace(/^(.+)\*\*$/, '$1');
-
-  return trimmed;
-}
-
-function stripBoldMarkers(text) {
-  return text.replace(/\*\*/g, '').trim();
-}
-
-function inlineMarkdownSegments(text) {
-  const parts = String(text).split('**');
-  return parts
-    .map((part, idx) => ({
-      text: part,
-      bold: idx % 2 === 1 && idx < parts.length - 1
-    }))
-    .filter(seg => seg.text);
-}
-
-function inlineMarkdownToHtml(text) {
-  return inlineMarkdownSegments(text)
-    .map(seg => seg.bold ? `<strong>${esc(seg.text)}</strong>` : esc(seg.text))
-    .join('');
+function appendInline(parent, inline) {
+  for (const segment of inline || []) {
+    let node = document.createTextNode(segment.text);
+    if (segment.code) node = el('code', {}, [node]);
+    if (segment.italic) node = el('em', {}, [node]);
+    if (segment.bold) node = el('strong', {}, [node]);
+    parent.append(node);
+  }
+  return parent;
 }
